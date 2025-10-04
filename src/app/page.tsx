@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { AttachmentIcon, RepeatIcon, TriangleUpIcon } from "@chakra-ui/icons";
 import {
   Box,
   Container,
@@ -30,11 +31,54 @@ import {
   Switch,
 } from "@chakra-ui/react";
 
+type Provider = "openai" | "deepseek" | "openwebui";
+
 interface Model {
   id: string;
   name: string;
-  provider: "openai" | "deepseek" | "openwebui";
+  provider: Provider;
 }
+
+interface EvaluationResult {
+  questionId: string;
+  modelResults: Record<string, boolean>;
+}
+
+interface ApiConfig {
+  key: string;
+  baseUrl?: string;
+}
+
+const NoFileSelected = () => (
+  <Box 
+    bg="purple.50" 
+    p={4}
+    py="45px"
+    borderRadius="md" 
+    borderWidth="1px" 
+    borderColor="purple.200" 
+    height="160px"
+  >
+    <VStack spacing={4} align="stretch" justify="center" height="full">
+      <Box>
+        <Text fontSize="sm" color="purple.600" mb={0.5}>File Status</Text>
+        <Text fontSize="md" color="purple.900" fontWeight="medium">
+          No file selected
+        </Text>
+      </Box>
+      
+      <Box>
+        <Text fontSize="sm" color="purple.600" mb={0.5}>Question Count</Text>
+        <Text fontSize="xl" color="purple.700" fontWeight="bold">
+          -
+        </Text>
+        <Text fontSize="xs" color="gray.500" mt={0.5}>
+          Upload a CSV file to see details
+        </Text>
+      </Box>
+    </VStack>
+  </Box>
+);
 
 interface EvaluationResult {
   questionId: string;
@@ -51,6 +95,8 @@ export default function Home() {
   const [availableModels, setAvailableModels] = useState<Model[]>([]);
   const [temperature, setTemperature] = useState(1.0);
   const [autoClearHistory, setAutoClearHistory] = useState(true);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [questionCount, setQuestionCount] = useState<number>(0);
   const [systemPrompt, setSystemPrompt] = useState("Answer the following multiple choice question by providing only the letter of the correct answer (e.g A, B, C, or D).");
   const [results, setResults] = useState<EvaluationResult[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -89,26 +135,22 @@ export default function Home() {
     }));
   };
 
-  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
 
-    try {
-      const text = await file.text();
-      // Process CSV file here
-      toast({
-        title: "File uploaded successfully",
-        status: "success",
-        duration: 3000,
-      });
-    } catch (error) {
-      toast({
-        title: "Error uploading file",
-        description: "Please make sure the file is in the correct format",
-        status: "error",
-        duration: 3000,
-      });
-    }
+    setSelectedFile(file);
+    const reader = new FileReader();
+    
+    reader.onload = (e) => {
+      const content = e.target?.result as string;
+      const lineCount = content.split('\n')
+        .filter(line => line.trim().length > 0)
+        .length - 1; // Subtract header row
+      setQuestionCount(lineCount);
+    };
+    
+    reader.readAsText(file);
   };
 
   const verifyApiKey = async () => {
@@ -233,6 +275,7 @@ export default function Home() {
                     onClick={verifyApiKey}
                     isLoading={isLoading}
                     size="sm"
+                    leftIcon={<RepeatIcon />}
                   >
                     Load Models
                   </Button>
@@ -300,40 +343,80 @@ export default function Home() {
         </Box>
 
         <Box p={6} borderRadius="lg" bg="white" boxShadow="lg" border="1px" borderColor="purple.100">
-          <HStack spacing={2} mb={4}>
-            <Box p={1.5} bg="purple.100" borderRadius="md">
-              <Text fontSize="sm" color="purple.600">📝</Text>
-            </Box>
-            <Heading size="sm">2. MCQ Database</Heading>
+          <HStack spacing={8} align="flex-start">
+            {/* Left Column */}
+            <VStack spacing={4} align="stretch" flex="1">
+              <HStack spacing={2}>
+                <Box p={1.5} bg="purple.100" borderRadius="md">
+                  <Text fontSize="sm" color="purple.600">📝</Text>
+                </Box>
+                <Heading size="sm">2. MCQ Database</Heading>
+              </HStack>
+
+              <Box>
+                <Text fontSize="md" color="gray.700" fontWeight="medium" mb={1}>
+                  Question Database File
+                </Text>
+                <Text fontSize="sm" color="gray.500">
+                  Upload a CSV file with columns: ID, Question, Correct Answer
+                </Text>
+              </Box>
+
+              <Button
+                leftIcon={<AttachmentIcon />}
+                colorScheme="purple"
+                variant="solid"
+                onClick={() => document.getElementById('file-upload')?.click()}
+                width="full"
+                size="sm"
+              >
+                Upload CSV File
+              </Button>
+
+              <Input
+                id="file-upload"
+                type="file"
+                accept=".csv"
+                onChange={handleFileUpload}
+                display="none"
+              />
+            </VStack>
+
+            {/* Right Column */}
+            <VStack spacing={3} align="stretch" flex="1" mt={1}>
+              {selectedFile ? (
+                <Box bg="purple.50" p={4} borderRadius="md" borderWidth="1px" borderColor="purple.200">
+                  <VStack align="stretch" spacing={2}>
+                    <Box>
+                      <Text fontSize="sm" color="purple.600" mb={0.5}>Current File</Text>
+                      <Text fontSize="md" color="purple.900" fontWeight="medium">
+                        {selectedFile.name}
+                      </Text>
+                    </Box>
+                    
+                    <Box>
+                      <Text fontSize="sm" color="purple.600" mb={0.5}>Question Count</Text>
+                      <Text fontSize="xl" color="purple.700" fontWeight="bold" display="inline">
+                        {questionCount > 0 ? `${questionCount.toLocaleString()} ` : '...'}
+                        <Text as="span" fontSize="xs" color="gray.500">
+                          {questionCount > 0 ? 'questions loaded' : 'Processing file...'}
+                        </Text>
+                      </Text>
+                    </Box>
+                  </VStack>
+                </Box>
+              ) : (
+                <Box bg="gray.50" p={6} borderRadius="lg" textAlign="center" padding={45}>
+                  <Text fontSize="md" color="gray.500">
+                    No file selected
+                  </Text>
+                  <Text fontSize="sm" color="gray.400" mt={1}>
+                    Upload a CSV file to see details
+                  </Text>
+                </Box>
+              )}
+            </VStack>
           </HStack>
-
-          <VStack spacing={1} align="stretch">
-            <Text fontSize="sm" color="gray.600">
-              Question Database File
-            </Text>
-            <Text fontSize="xs" color="gray.500">
-              Upload a CSV file with columns: ID, Question, Correct Answer
-            </Text>
-
-            <Button
-              leftIcon={<Text fontSize="sm">⬆️</Text>}
-              colorScheme="purple"
-              variant="solid"
-              onClick={() => document.getElementById('file-upload')?.click()}
-              width="full"
-              size="sm"
-              mt={2}
-            >
-              Upload CSV
-            </Button>
-            <Input
-              id="file-upload"
-              type="file"
-              accept=".csv"
-              onChange={handleFileUpload}
-              display="none"
-            />
-          </VStack>
         </Box>
 
         <Box p={6} borderRadius="lg" bg="white" boxShadow="lg" border="1px" borderColor="purple.100">
@@ -407,6 +490,7 @@ export default function Home() {
               isDisabled={selectedModels.length === 0}
               size="md"
               alignSelf="flex-start"
+              leftIcon={<TriangleUpIcon transform="rotate(90deg)" boxSize={3} />}
             >
               Start Evaluation
             </Button>
