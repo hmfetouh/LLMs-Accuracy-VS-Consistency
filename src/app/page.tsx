@@ -167,25 +167,26 @@ export default function Home() {
   };
 
   return (
-    <Container maxW="container.xl" py={8}>
-      <VStack spacing={6} align="stretch">
-        <Box p={6} borderRadius="xl" bg="white" boxShadow="sm">
-          <HStack spacing={3} mb={6}>
-            <Box p={2} bg="purple.100" borderRadius="md">
-              <Text color="purple.600">🤖</Text>
+    <Container maxW="container.xl" py={4}>
+      <VStack spacing={4} align="stretch">
+        <Box p={4} borderRadius="lg" bg="white" boxShadow="sm">
+          <HStack spacing={2} mb={4}>
+            <Box p={1.5} bg="purple.100" borderRadius="md">
+              <Text fontSize="sm" color="purple.600">🤖</Text>
             </Box>
-            <Heading size="md">AI Models</Heading>
+            <Heading size="sm">AI Models</Heading>
           </HStack>
 
           <Box>
             <VStack spacing={4} align="stretch">
-              <HStack spacing={4} align="flex-end">
+              <HStack spacing={3} align="flex-end">
                 <FormControl flex="1">
-                  <FormLabel>API Provider</FormLabel>
+                  <FormLabel fontSize="sm">API Provider</FormLabel>
                   <Select 
                     value={currentProvider} 
                     onChange={(e) => setCurrentProvider(e.target.value as "openai" | "deepseek" | "openwebui")}
                     bg="gray.50"
+                    size="sm"
                   >
                     <option value="openai">OpenAI API</option>
                     <option value="deepseek">DeepSeek API</option>
@@ -194,25 +195,27 @@ export default function Home() {
                 </FormControl>
 
                 <FormControl flex="2">
-                  <FormLabel>API Key</FormLabel>
+                  <FormLabel fontSize="sm">API Key</FormLabel>
                   <Input
                     type="password"
                     value={getApiKey()}
                     onChange={(e) => updateApiKey(e.target.value)}
                     placeholder="Enter your API key"
                     bg="gray.50"
+                    size="sm"
                   />
                 </FormControl>
               </HStack>
 
-              <HStack spacing={4} align="flex-end">
+              <HStack spacing={3} align="flex-end">
                 <FormControl flex="2">
-                  <FormLabel>Base URL (Optional)</FormLabel>
+                  <FormLabel fontSize="sm">Base URL (Optional)</FormLabel>
                   <Input
                     value={getBaseUrl()}
                     onChange={(e) => updateBaseUrl(e.target.value)}
                     placeholder={getDefaultBaseUrl()}
                     bg="gray.50"
+                    size="sm"
                   />
                 </FormControl>
 
@@ -222,6 +225,7 @@ export default function Home() {
                     width="full"
                     onClick={verifyApiKey}
                     isLoading={isLoading}
+                    size="sm"
                   >
                     Load Models
                   </Button>
@@ -229,7 +233,7 @@ export default function Home() {
               </HStack>
 
               <FormControl>
-                <FormLabel>Add Model</FormLabel>
+                <FormLabel fontSize="sm">Add Model</FormLabel>
                 <Select
                   placeholder="Select model"
                   onChange={(e) => {
@@ -239,6 +243,7 @@ export default function Home() {
                     }
                   }}
                   bg="gray.50"
+                  size="sm"
                 >
                   {availableModels
                     .filter(model => model.provider === currentProvider)
@@ -252,28 +257,27 @@ export default function Home() {
               </FormControl>
 
               {selectedModels.length > 0 && (
-                <Box mt={4}>
-                  <Text fontWeight="medium" mb={2}>Selected Models:</Text>
-                  <Flex wrap="wrap" gap={2}>
+                <Box mt={3}>
+                  <Text fontWeight="medium" fontSize="sm" mb={1.5}>Selected Models:</Text>
+                  <Flex wrap="wrap" gap={1.5}>
                     {selectedModels.map((model) => (
                       <Tag
                         key={model.id}
-                        size="md"
+                        size="sm"
                         borderRadius="full"
                         variant="solid"
-                        colorScheme={
-                          model.provider === "openai" ? "green" :
-                          model.provider === "deepseek" ? "blue" : "purple"
-                        }
+                        colorScheme="purple"
                       >
-                        <HStack spacing={2}>
-                          <Text>{model.name}</Text>
+                        <HStack spacing={1}>
+                          <Text fontSize="xs">{model.name}</Text>
                           <Button
                             size="xs"
                             variant="unstyled"
                             onClick={() => setSelectedModels(prev => prev.filter(m => m.id !== model.id))}
-                            ml={1}
+                            ml={0.5}
                             p={0}
+                            height="auto"
+                            minW="auto"
                             _hover={{ opacity: 0.8 }}
                           >
                             ✕
@@ -288,15 +292,15 @@ export default function Home() {
           </Box>
         </Box>
 
-        <Box p={6} borderRadius="xl" bg="white" boxShadow="sm">
-          <HStack spacing={3} mb={6}>
-            <Box p={2} bg="purple.100" borderRadius="md">
-              <Text color="purple.600">📝</Text>
+        <Box p={4} borderRadius="lg" bg="white" boxShadow="sm">
+          <HStack spacing={2} mb={4}>
+            <Box p={1.5} bg="purple.100" borderRadius="md">
+              <Text fontSize="sm" color="purple.600">📝</Text>
             </Box>
-            <Heading size="md">MCQ Database</Heading>
+            <Heading size="sm">MCQ Database</Heading>
           </HStack>
 
-          <VStack spacing={2} align="stretch">
+          <VStack spacing={1} align="stretch">
             <Text fontSize="sm" color="gray.600">
               Question Database File
             </Text>
@@ -305,11 +309,13 @@ export default function Home() {
             </Text>
 
             <Button
-              leftIcon={<Text>⬆️</Text>}
+              leftIcon={<Text fontSize="sm">⬆️</Text>}
               colorScheme="purple"
               variant="solid"
               onClick={() => document.getElementById('file-upload')?.click()}
               width="full"
+              size="sm"
+              mt={2}
             >
               Upload CSV
             </Button>
@@ -323,28 +329,29 @@ export default function Home() {
           </VStack>
         </Box>
 
-        <Box p={6} borderRadius="xl" bg="white" boxShadow="sm">
-          <HStack spacing={3} mb={6}>
-            <Box p={2} bg="purple.100" borderRadius="md">
-              <Text color="purple.600">⚙️</Text>
+        <Box p={4} borderRadius="lg" bg="white" boxShadow="sm">
+          <HStack spacing={2} mb={4}>
+            <Box p={1.5} bg="purple.100" borderRadius="md">
+              <Text fontSize="sm" color="purple.600">⚙️</Text>
             </Box>
-            <Heading size="md">Evaluation Configuration</Heading>
+            <Heading size="sm">Evaluation Configuration</Heading>
           </HStack>
 
-          <VStack spacing={8} align="stretch">
+          <VStack spacing={4} align="stretch">
             <FormControl>
-              <FormLabel>System Prompt</FormLabel>
+              <FormLabel fontSize="sm">System Prompt</FormLabel>
               <Textarea
                 value={systemPrompt}
                 onChange={(e) => setSystemPrompt(e.target.value)}
                 placeholder="Enter system prompt for the AI model"
-                rows={4}
+                rows={3}
                 bg="gray.50"
+                size="sm"
               />
             </FormControl>
 
             <FormControl>
-              <FormLabel>Temperature: {temperature}</FormLabel>
+              <FormLabel fontSize="sm">Temperature: {temperature}</FormLabel>
               <Slider
                 value={temperature}
                 onChange={setTemperature}
@@ -352,6 +359,7 @@ export default function Home() {
                 max={2}
                 step={0.1}
                 colorScheme="purple"
+                size="sm"
               >
                 <SliderTrack>
                   <SliderFilledTrack />
@@ -367,6 +375,7 @@ export default function Home() {
               colorScheme="purple"
               width="full"
               isDisabled={selectedModels.length === 0}
+              size="sm"
             >
               Start Evaluation
             </Button>
