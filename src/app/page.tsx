@@ -27,6 +27,7 @@ import {
   SliderTrack,
   SliderFilledTrack,
   SliderThumb,
+  Switch,
 } from "@chakra-ui/react";
 
 interface Model {
@@ -48,8 +49,9 @@ interface ApiConfig {
 export default function Home() {
   const [selectedModels, setSelectedModels] = useState<Model[]>([]);
   const [availableModels, setAvailableModels] = useState<Model[]>([]);
-  const [temperature, setTemperature] = useState(0.7);
-  const [systemPrompt, setSystemPrompt] = useState("");
+  const [temperature, setTemperature] = useState(1.0);
+  const [autoClearHistory, setAutoClearHistory] = useState(true);
+  const [systemPrompt, setSystemPrompt] = useState("Answer the following multiple choice question by providing only the letter of the correct answer (e.g A, B, C, or D).");
   const [results, setResults] = useState<EvaluationResult[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [currentProvider, setCurrentProvider] = useState<"openai" | "deepseek" | "openwebui">("openai");
@@ -167,7 +169,7 @@ export default function Home() {
   };
 
   return (
-    <Container maxW="container.xl" py={4}>
+    <Container maxW="8xl" py={4}>
       <VStack spacing={4} align="stretch">
         <Box p={4} borderRadius="lg" bg="white" boxShadow="sm">
           <HStack spacing={2} mb={4}>
@@ -338,44 +340,68 @@ export default function Home() {
           </HStack>
 
           <VStack spacing={4} align="stretch">
-            <FormControl>
-              <FormLabel fontSize="sm">System Prompt</FormLabel>
-              <Textarea
-                value={systemPrompt}
-                onChange={(e) => setSystemPrompt(e.target.value)}
-                placeholder="Enter system prompt for the AI model"
-                rows={3}
-                bg="gray.50"
-                size="sm"
-              />
-            </FormControl>
+            <HStack spacing={8} align="flex-start">
+              <FormControl flex="3">
+                <FormLabel fontSize="sm">System Prompt</FormLabel>
+                <Textarea
+                  value={systemPrompt}
+                  onChange={(e) => setSystemPrompt(e.target.value)}
+                  placeholder="Enter system prompt for the AI model"
+                  rows={5}
+                  bg="gray.50"
+                  size="sm"
+                />
+              </FormControl>
 
-            <FormControl>
-              <FormLabel fontSize="sm">Temperature: {temperature}</FormLabel>
-              <Slider
-                value={temperature}
-                onChange={setTemperature}
-                min={0}
-                max={2}
-                step={0.1}
-                colorScheme="purple"
-                size="sm"
-              >
-                <SliderTrack>
-                  <SliderFilledTrack />
-                </SliderTrack>
-                <SliderThumb />
-              </Slider>
-              <Text fontSize="xs" color="gray.500" mt={1}>
-                Lower values make the output more focused and deterministic
-              </Text>
-            </FormControl>
+              <VStack spacing={6} align="stretch" flex="2">
+                <FormControl>
+                  <FormLabel fontSize="sm">Temperature: {temperature}</FormLabel>
+                  <Slider
+                    value={temperature}
+                    onChange={setTemperature}
+                    min={0}
+                    max={2}
+                    step={0.1}
+                    colorScheme="purple"
+                    size="sm"
+                  >
+                    <SliderTrack>
+                      <SliderFilledTrack />
+                    </SliderTrack>
+                    <SliderThumb />
+                  </Slider>
+                  <Text fontSize="xs" color="gray.500" mt={1}>
+                    Lower values make the output more focused and deterministic
+                  </Text>
+                </FormControl>
+
+                <FormControl>
+                  <HStack justify="space-between" align="center" spacing={4}>
+                    <Box flex="1">
+                      <FormLabel fontSize="sm" mb={0} cursor="pointer">
+                        Auto Clear History
+                      </FormLabel>
+                      <Text fontSize="xs" color="gray.500">
+                        Clear temporary history between questions
+                      </Text>
+                    </Box>
+                    <Switch
+                      isChecked={autoClearHistory}
+                      onChange={() => setAutoClearHistory(!autoClearHistory)}
+                      colorScheme="purple"
+                      size="md"
+                    />
+                  </HStack>
+                </FormControl>
+              </VStack>
+            </HStack>
 
             <Button
               colorScheme="purple"
-              width="full"
+              width="50%"
               isDisabled={selectedModels.length === 0}
-              size="sm"
+              size="md"
+              alignSelf="flex-start"
             >
               Start Evaluation
             </Button>
