@@ -176,7 +176,7 @@ export default function Home() {
             <Box p={1.5} bg="purple.100" borderRadius="md">
               <Text fontSize="sm" color="purple.600">🤖</Text>
             </Box>
-            <Heading size="sm">AI Models</Heading>
+            <Heading size="sm">1. Add Large Language Models (LLMs)</Heading>
           </HStack>
 
           <Box>
@@ -299,7 +299,7 @@ export default function Home() {
             <Box p={1.5} bg="purple.100" borderRadius="md">
               <Text fontSize="sm" color="purple.600">📝</Text>
             </Box>
-            <Heading size="sm">MCQ Database</Heading>
+            <Heading size="sm">2. MCQ Database</Heading>
           </HStack>
 
           <VStack spacing={1} align="stretch">
@@ -336,7 +336,7 @@ export default function Home() {
             <Box p={1.5} bg="purple.100" borderRadius="md">
               <Text fontSize="sm" color="purple.600">⚙️</Text>
             </Box>
-            <Heading size="sm">Evaluation Configuration</Heading>
+            <Heading size="sm">3. LLMs Configuration</Heading>
           </HStack>
 
           <VStack spacing={4} align="stretch">
