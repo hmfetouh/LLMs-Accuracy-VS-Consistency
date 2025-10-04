@@ -170,8 +170,13 @@ export default function Home() {
 
   return (
     <Container maxW="8xl" py={4}>
-      <VStack spacing={4} align="stretch">
-        <Box p={4} borderRadius="lg" bg="white" boxShadow="sm">
+      <VStack spacing={6} align="stretch">
+        <Box p={6} borderRadius="lg" bg="purple.50" textAlign="center">
+          <Heading size="lg" color="purple.700" mb={2}>LLM Evaluation Dashboard</Heading>
+          <Text fontSize="md" color="purple.600">Accuracy vs Consistency on MCQ</Text>
+        </Box>
+
+        <Box p={6} borderRadius="lg" bg="white" boxShadow="lg" border="1px" borderColor="purple.100">
           <HStack spacing={2} mb={4}>
             <Box p={1.5} bg="purple.100" borderRadius="md">
               <Text fontSize="sm" color="purple.600">🤖</Text>
@@ -294,7 +299,7 @@ export default function Home() {
           </Box>
         </Box>
 
-        <Box p={4} borderRadius="lg" bg="white" boxShadow="sm">
+        <Box p={6} borderRadius="lg" bg="white" boxShadow="lg" border="1px" borderColor="purple.100">
           <HStack spacing={2} mb={4}>
             <Box p={1.5} bg="purple.100" borderRadius="md">
               <Text fontSize="sm" color="purple.600">📝</Text>
@@ -331,7 +336,7 @@ export default function Home() {
           </VStack>
         </Box>
 
-        <Box p={4} borderRadius="lg" bg="white" boxShadow="sm">
+        <Box p={6} borderRadius="lg" bg="white" boxShadow="lg" border="1px" borderColor="purple.100">
           <HStack spacing={2} mb={4}>
             <Box p={1.5} bg="purple.100" borderRadius="md">
               <Text fontSize="sm" color="purple.600">⚙️</Text>
