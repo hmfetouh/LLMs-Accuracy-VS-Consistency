@@ -8,11 +8,6 @@ import {
   Heading,
   Input,
   Select,
-  NumberInput,
-  NumberInputField,
-  NumberInputStepper,
-  NumberIncrementStepper,
-  NumberDecrementStepper,
   Textarea,
   Button,
   Table,
@@ -29,9 +24,12 @@ import {
   Text,
   HStack,
   Tag,
-  IconButton,
   Flex,
   useColorModeValue,
+  Slider,
+  SliderTrack,
+  SliderFilledTrack,
+  SliderThumb,
 } from "@chakra-ui/react";
 import { verifyOpenAIKey, verifyDeepSeekKey, verifyOpenWebUIKey } from "./api";
 
@@ -159,28 +157,102 @@ export default function Home() {
   const borderColor = useColorModeValue("gray.200", "gray.700");
 
   return (
-    <Container maxW="container.xl" py={4}>
-      <VStack spacing={4} align="stretch">
-        <Heading size="md" mb={2}>LLMs Accuracy vs Consistency on MCQ</Heading>
+    <Container maxW="container.lg" py={8}>
+      <VStack spacing={6} align="stretch">
+        <Box p={6} borderRadius="xl" bg="white" boxShadow="sm">
+          <HStack spacing={3} mb={6}>
+            <Box p={2} bg="purple.100" borderRadius="md">
+              <Text color="purple.600">⚙️</Text>
+            </Box>
+            <Heading size="md">Evaluation Configuration</Heading>
+          </HStack>
 
-        <Box p={4} borderWidth={1} borderRadius="md" bg={bgColor} borderColor={borderColor}>
-          <Text fontSize="sm" fontWeight="bold" mb={3}>API Configuration</Text>
-          <VStack spacing={3}>
+          <VStack spacing={8} align="stretch">
+            <Box>
+              <FormControl>
+                <FormLabel>Temperature</FormLabel>
+                <Slider
+                  value={temperature}
+                  onChange={(value: number) => setTemperature(value)}
+                  min={0}
+                  max={2}
+                  step={0.01}
+                  colorScheme="purple"
+                >
+                  <SliderTrack>
+                    <SliderFilledTrack />
+                  </SliderTrack>
+                  <SliderThumb boxSize={4} />
+                </Slider>
+                <Text mt={2} fontSize="sm" color="gray.600">
+                  Controls randomness. Lower = focused, higher = creative.
+                </Text>
+                <Text fontSize="sm" color="gray.900" fontWeight="medium">
+                  {temperature.toFixed(2)}
+                </Text>
+              </FormControl>
+            </Box>
+
+            <Box>
+              <FormControl>
+                <FormLabel>System Prompt</FormLabel>
+                <Textarea
+                  value={systemPrompt}
+                  onChange={(e) => setSystemPrompt(e.target.value)}
+                  placeholder="You are a helpful assistant. Answer the following multiple choice question by providing only the letter of the correct answer (A, B, C, or D)."
+                  size="md"
+                  rows={4}
+                  borderRadius="md"
+                  borderColor="gray.200"
+                  _hover={{ borderColor: "purple.400" }}
+                  _focus={{ borderColor: "purple.500", boxShadow: "0 0 0 1px var(--chakra-colors-purple-500)" }}
+                />
+                <Text mt={2} fontSize="sm" color="gray.600">
+                  Guides model behavior for each API call.
+                </Text>
+              </FormControl>
+            </Box>
+
+            <Button
+              colorScheme="purple"
+              size="lg"
+              width="full"
+              rightIcon={<Text>▶</Text>}
+              onClick={startEvaluation}
+              isLoading={isLoading}
+              loadingText="Running Evaluation"
+              borderRadius="md"
+              py={7}
+            >
+              Run Evaluation
+            </Button>
+          </VStack>
+        </Box>
+
+        <Box p={6} borderRadius="xl" bg="white" boxShadow="sm">
+          <HStack spacing={3} mb={6}>
+            <Box p={2} bg="blue.100" borderRadius="md">
+              <Text color="blue.600">🔑</Text>
+            </Box>
+            <Heading size="md">API Configuration</Heading>
+          </HStack>
+
+          <VStack spacing={4}>
             <FormControl>
-              <FormLabel fontSize="xs">OpenAI API Key</FormLabel>
+              <FormLabel>OpenAI API Key</FormLabel>
               <HStack>
                 <Input
-                  size="sm"
                   type="password"
                   value={openaiKey}
                   onChange={(e) => setOpenaiKey(e.target.value)}
                   placeholder="Enter OpenAI API key"
+                  borderRadius="md"
                 />
                 <Button
-                  size="sm"
                   onClick={() => verifyApiKey("openai", openaiKey)}
                   isLoading={isLoading}
                   colorScheme="blue"
+                  borderRadius="md"
                 >
                   Verify
                 </Button>
@@ -188,20 +260,20 @@ export default function Home() {
             </FormControl>
 
             <FormControl>
-              <FormLabel fontSize="xs">DeepSeek API Key</FormLabel>
+              <FormLabel>DeepSeek API Key</FormLabel>
               <HStack>
                 <Input
-                  size="sm"
                   type="password"
                   value={deepseekKey}
                   onChange={(e) => setDeepseekKey(e.target.value)}
                   placeholder="Enter DeepSeek API key"
+                  borderRadius="md"
                 />
                 <Button
-                  size="sm"
                   onClick={() => verifyApiKey("deepseek", deepseekKey)}
                   isLoading={isLoading}
                   colorScheme="blue"
+                  borderRadius="md"
                 >
                   Verify
                 </Button>
@@ -209,20 +281,20 @@ export default function Home() {
             </FormControl>
 
             <FormControl>
-              <FormLabel fontSize="xs">Open WebUI API Key</FormLabel>
+              <FormLabel>Open WebUI API Key</FormLabel>
               <HStack>
                 <Input
-                  size="sm"
                   type="password"
                   value={openwebuiKey}
                   onChange={(e) => setOpenwebuiKey(e.target.value)}
                   placeholder="Enter Open WebUI API key"
+                  borderRadius="md"
                 />
                 <Button
-                  size="sm"
                   onClick={() => verifyApiKey("openwebui", openwebuiKey)}
                   isLoading={isLoading}
                   colorScheme="blue"
+                  borderRadius="md"
                 >
                   Verify
                 </Button>
@@ -231,11 +303,16 @@ export default function Home() {
           </VStack>
         </Box>
 
-        <Box p={4} borderWidth={1} borderRadius="md" bg={bgColor} borderColor={borderColor}>
-          <Text fontSize="sm" fontWeight="bold" mb={3}>Model Selection</Text>
-          <VStack spacing={3}>
+        <Box p={6} borderRadius="xl" bg="white" boxShadow="sm">
+          <HStack spacing={3} mb={6}>
+            <Box p={2} bg="green.100" borderRadius="md">
+              <Text color="green.600">🤖</Text>
+            </Box>
+            <Heading size="md">Model Selection</Heading>
+          </HStack>
+
+          <VStack spacing={4}>
             <Select
-              size="sm"
               placeholder="Select models"
               onChange={(e) => {
                 const model = availableModels.find(m => m.id === e.target.value);
@@ -243,6 +320,7 @@ export default function Home() {
                   setSelectedModels(prev => [...prev, model]);
                 }
               }}
+              borderRadius="md"
             >
               {availableModels.map((model) => (
                 <option key={model.id} value={model.id}>
@@ -254,17 +332,17 @@ export default function Home() {
               {selectedModels.map((model) => (
                 <Tag
                   key={model.id}
-                  size="sm"
+                  size="lg"
                   borderRadius="full"
                   variant="subtle"
-                  colorScheme="blue"
+                  colorScheme="green"
                 >
-                  <Text fontSize="xs">{model.name}</Text>
+                  <Text>{model.name}</Text>
                   <Button
                     size="xs"
-                    ml={1}
+                    ml={2}
                     variant="ghost"
-                    colorScheme="blue"
+                    colorScheme="green"
                     onClick={() => setSelectedModels(prev => prev.filter(m => m.id !== model.id))}
                   >
                     ×
@@ -275,60 +353,57 @@ export default function Home() {
           </VStack>
         </Box>
 
-        <Box p={4} borderWidth={1} borderRadius="md" bg={bgColor} borderColor={borderColor}>
-          <Text fontSize="sm" fontWeight="bold" mb={3}>Questions Database</Text>
+        <Box p={6} borderRadius="xl" bg="white" boxShadow="sm">
+          <HStack spacing={3} mb={6}>
+            <Box p={2} bg="orange.100" borderRadius="md">
+              <Text color="orange.600">📝</Text>
+            </Box>
+            <Heading size="md">Questions Database</Heading>
+          </HStack>
+
           <Input
-            size="sm"
             type="file"
             accept=".csv"
             onChange={handleFileUpload}
+            pt={1}
+            borderRadius="md"
           />
         </Box>
 
-        <Box p={4} borderWidth={1} borderRadius="md" bg={bgColor} borderColor={borderColor}>
-          <Text fontSize="sm" fontWeight="bold" mb={3}>Evaluation Settings</Text>
-          <VStack spacing={3}>
-            <FormControl>
-              <FormLabel fontSize="xs">Temperature</FormLabel>
-              <NumberInput
-                size="sm"
-                value={temperature}
-                onChange={(_, value) => setTemperature(value)}
-                min={0}
-                max={2}
-                step={0.1}
-                precision={2}
-              >
-                <NumberInputField />
-                <NumberInputStepper>
-                  <NumberIncrementStepper />
-                  <NumberDecrementStepper />
-                </NumberInputStepper>
-              </NumberInput>
-            </FormControl>
-
-            <FormControl>
-              <FormLabel fontSize="xs">System Prompt</FormLabel>
-              <Textarea
-                size="sm"
-                value={systemPrompt}
-                onChange={(e) => setSystemPrompt(e.target.value)}
-                placeholder="Enter system prompt"
-                rows={3}
-              />
-            </FormControl>
-
-            <Button
-              size="sm"
-              colorScheme="blue"
-              onClick={startEvaluation}
-              isLoading={isLoading}
-              width="full"
-            >
-              Start Evaluation
-            </Button>
-          </VStack>
-        </Box>
+        {results.length > 0 && (
+          <Box p={6} borderRadius="xl" bg="white" boxShadow="sm">
+            <HStack spacing={3} mb={6}>
+              <Box p={2} bg="purple.100" borderRadius="md">
+                <Text color="purple.600">📊</Text>
+              </Box>
+              <Heading size="md">Results</Heading>
+            </HStack>
+            <Table variant="simple">
+              <Thead>
+                <Tr>
+                  <Th>Question ID</Th>
+                  {selectedModels.map((model) => (
+                    <Th key={model.id}>{model.name}</Th>
+                  ))}
+                </Tr>
+              </Thead>
+              <Tbody>
+                {results.map((result) => (
+                  <Tr key={result.questionId}>
+                    <Td>{result.questionId}</Td>
+                    {selectedModels.map((model) => (
+                      <Td key={model.id}>
+                        <Text color={result.modelResults[model.id] ? "green.500" : "red.500"}>
+                          {result.modelResults[model.id] ? "✓" : "✗"}
+                        </Text>
+                      </Td>
+                    ))}
+                  </Tr>
+                ))}
+              </Tbody>
+            </Table>
+          </Box>
+        )}
 
         {results.length > 0 && (
           <Box p={4} borderWidth={1} borderRadius="md" bg={bgColor} borderColor={borderColor}>
