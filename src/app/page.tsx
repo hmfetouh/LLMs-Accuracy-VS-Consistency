@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { AttachmentIcon, RepeatIcon, TriangleUpIcon } from "@chakra-ui/icons";
+import { AttachmentIcon, ChevronDownIcon, RepeatIcon, TriangleUpIcon } from "@chakra-ui/icons";
 import {
   Box,
   Container,
@@ -22,13 +22,16 @@ import {
   FormLabel,
   Text,
   HStack,
-  Tag,
   Flex,
   Slider,
   SliderTrack,
   SliderFilledTrack,
   SliderThumb,
   Switch,
+  Menu,
+  MenuButton,
+  MenuList,
+  MenuItem,
 } from "@chakra-ui/react";
 
 type Provider = "openai" | "deepseek" | "openwebui";
@@ -37,16 +40,6 @@ interface Model {
   id: string;
   name: string;
   provider: Provider;
-}
-
-interface EvaluationResult {
-  questionId: string;
-  modelResults: Record<string, boolean>;
-}
-
-interface ApiConfig {
-  key: string;
-  baseUrl?: string;
 }
 
 const NoFileSelected = () => (
@@ -100,6 +93,7 @@ export default function Home() {
   const [systemPrompt, setSystemPrompt] = useState("Answer the following multiple choice question by providing only the letter of the correct answer (e.g A, B, C, or D).");
   const [results, setResults] = useState<EvaluationResult[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [modelSearch, setModelSearch] = useState("");
   const [currentProvider, setCurrentProvider] = useState<"openai" | "deepseek" | "openwebui">("openai");
   const [apiConfigs, setApiConfigs] = useState<Record<string, ApiConfig>>({
     openai: { key: "", baseUrl: "https://api.openai.com/v1" },
@@ -254,9 +248,7 @@ export default function Home() {
                     size="sm"
                   />
                 </FormControl>
-              </HStack>
 
-              <HStack spacing={3} align="flex-end">
                 <FormControl flex="2">
                   <FormLabel fontSize="sm">Base URL (Optional)</FormLabel>
                   <Input
@@ -267,11 +259,77 @@ export default function Home() {
                     size="sm"
                   />
                 </FormControl>
+              </HStack>
 
-                <FormControl flex="1">
+              <FormControl>
+                <FormLabel fontSize="sm">Add Model</FormLabel>
+                <HStack spacing={3} align="flex-end">
+                  <Box position="relative" flex="1">
+                    <Menu matchWidth>
+                      <MenuButton
+                        as={Button}
+                        rightIcon={<ChevronDownIcon />}
+                        width="full"
+                        bg="gray.50"
+                        size="sm"
+                        textAlign="left"
+                        fontWeight="normal"
+                      >
+                        Select model
+                      </MenuButton>
+                      <MenuList bg="gray.50" p={0}>
+                        {availableModels.filter(model => !selectedModels.some(m => m.id === model.id)).length > 8 && (
+                          <Box 
+                            borderBottom="1px" 
+                            borderColor="gray.200"
+                            position="sticky"
+                            top={0}
+                            bg="gray.50"
+                            zIndex={1}
+                          >
+                            <Input
+                              placeholder="Search models..."
+                              size="sm"
+                              value={modelSearch}
+                              onChange={(e) => setModelSearch(e.target.value)}
+                              bg="white"
+                              border="none"
+                              borderRadius="0"
+                              _focus={{
+                                boxShadow: "none",
+                                bg: "white"
+                              }}
+                            />
+                          </Box>
+                        )}
+                        <Box maxH="250px" overflowY="auto">
+                          {availableModels
+                            .filter(model => 
+                              !selectedModels.some(m => m.id === model.id) &&
+                              (model.name.toLowerCase().includes(modelSearch.toLowerCase()) ||
+                               model.id.toLowerCase().includes(modelSearch.toLowerCase()))
+                            )
+                            .map(model => (
+                              <MenuItem
+                                key={model.id}
+                                onClick={() => {
+                                  setSelectedModels(prev => [...prev, model]);
+                                  setModelSearch("");
+                                }}
+                                py={2}
+                                bg="gray.50"
+                                _hover={{ bg: "gray.100" }}
+                              >
+                                {model.name}
+                              </MenuItem>
+                            ))
+                          }
+                        </Box>
+                      </MenuList>
+                    </Menu>
+                  </Box>
                   <Button
                     colorScheme="purple"
-                    width="full"
                     onClick={verifyApiKey}
                     isLoading={isLoading}
                     size="sm"
@@ -279,53 +337,35 @@ export default function Home() {
                   >
                     Load Models
                   </Button>
-                </FormControl>
-              </HStack>
-
-              <FormControl>
-                <FormLabel fontSize="sm">Add Model</FormLabel>
-                <Select
-                  placeholder="Select model"
-                  onChange={(e) => {
-                    const model = availableModels.find(m => m.id === e.target.value);
-                    if (model && !selectedModels.find(m => m.id === model.id)) {
-                      setSelectedModels(prev => [...prev, model]);
-                    }
-                  }}
-                  bg="gray.50"
-                  size="sm"
-                >
-                  {availableModels
-                    .filter(model => model.provider === currentProvider)
-                    .map((model) => (
-                      <option key={model.id} value={model.id}>
-                        {model.name}
-                      </option>
-                    ))
-                  }
-                </Select>
+                </HStack>
               </FormControl>
 
               {selectedModels.length > 0 && (
                 <Box mt={3}>
                   <Text fontWeight="medium" fontSize="sm" mb={1.5}>Selected Models:</Text>
-                  <Flex wrap="wrap" gap={1.5}>
-                    {selectedModels.map((model) => (
-                      <Tag
+                  <Flex wrap="wrap" gap={2}>
+                    {selectedModels.map((model, index) => (
+                      <Box
                         key={model.id}
-                        size="sm"
-                        borderRadius="full"
-                        variant="solid"
-                        colorScheme="purple"
+                        bg="purple.50"
+                        border="1px"
+                        borderColor="purple.200"
+                        borderRadius="md"
+                        px={3}
+                        py={1.5}
                       >
-                        <HStack spacing={1}>
-                          <Text fontSize="xs">{model.name}</Text>
+                        <HStack spacing={2} align="center">
+                          <Text fontSize="xs" color="purple.700">
+                            <Text as="span" color="purple.500" mr={1}>{index + 1}.</Text>
+                            <Text as="span" color="purple.500">{model.provider}/</Text>
+                            {model.name}
+                          </Text>
                           <Button
                             size="xs"
-                            variant="unstyled"
+                            variant="ghost"
+                            colorScheme="purple"
                             onClick={() => setSelectedModels(prev => prev.filter(m => m.id !== model.id))}
-                            ml={0.5}
-                            p={0}
+                            p={1}
                             height="auto"
                             minW="auto"
                             _hover={{ opacity: 0.8 }}
@@ -333,7 +373,7 @@ export default function Home() {
                             ✕
                           </Button>
                         </HStack>
-                      </Tag>
+                      </Box>
                     ))}
                   </Flex>
                 </Box>
