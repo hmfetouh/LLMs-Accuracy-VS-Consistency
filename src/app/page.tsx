@@ -204,20 +204,82 @@ export default function Home() {
     }
   };
 
-  return (
-    <Container maxW="8xl" py={4}>
-      <VStack spacing={6} align="stretch">
-        <Box p={6} borderRadius="lg" bg="purple.50" textAlign="center">
-          <Heading size="lg" color="purple.700" mb={2}>LLM Evaluation Dashboard</Heading>
-          <Text fontSize="md" color="purple.600">Accuracy vs Consistency on MCQ</Text>
-        </Box>
+  const menuItems = [
+    { id: "models", title: "1. Add Models", icon: "🤖" },
+    { id: "database", title: "2. MCQ Database", icon: "📝" },
+    { id: "config", title: "3. Configuration", icon: "⚙️" },
+    { id: "evaluation", title: "4. Evaluation", icon: "📊" }
+  ];
 
-        <Box p={6} borderRadius="lg" bg="white" boxShadow="lg" border="1px" borderColor="purple.100">
+  return (
+    <Flex h="100vh">
+      {/* Sidebar */}
+      <Box
+        w="280px"
+        bg="purple.50"
+        p={6}
+        borderRight="1px"
+        borderColor="purple.100"
+        position="fixed"
+        h="100vh"
+        left={0}
+        top={0}
+      >
+        <VStack spacing={6} align="stretch">
+          <Box mb={6}>
+            <Heading size="md" color="purple.700" mb={1}>LLM Evaluation</Heading>
+            <Text fontSize="sm" color="purple.600">Accuracy vs Consistency</Text>
+          </Box>
+
+          <VStack spacing={2} align="stretch">
+            {menuItems.filter(item => !item.hidden).map((item) => (
+              <Button
+                key={item.id}
+                variant="ghost"
+                justifyContent="flex-start"
+                py={3}
+                pl={4}
+                leftIcon={
+                  <Box p={1} bg="purple.100" borderRadius="md">
+                    <Text fontSize="sm">{item.icon}</Text>
+                  </Box>
+                }
+                onClick={() => {
+                  const element = document.getElementById(item.id);
+                  element?.scrollIntoView({ behavior: "smooth" });
+                }}
+                _hover={{ bg: "purple.100" }}
+                color="purple.700"
+                fontSize="sm"
+                fontWeight="medium"
+              >
+                {item.title}
+              </Button>
+            ))}
+          </VStack>
+        </VStack>
+      </Box>
+
+      {/* Main Content */}
+      <Box ml="280px" flex={1} py={8}>
+        <Box maxW="1200px" mx="auto" px={8}>
+          <VStack spacing={6} align="stretch">
+
+        <Box 
+          id="models"
+          p={6} 
+          borderRadius="lg" 
+          bg="white" 
+          boxShadow="lg" 
+          border="1px" 
+          borderColor="purple.100"
+          scroll-margin-top="2rem"
+        >
           <HStack spacing={2} mb={4}>
             <Box p={1.5} bg="purple.100" borderRadius="md">
               <Text fontSize="sm" color="purple.600">🤖</Text>
             </Box>
-            <Heading size="sm">1. Add Large Language Models (LLMs)</Heading>
+            <Heading size="sm">Add Large Language Models (LLMs)</Heading>
           </HStack>
 
           <Box>
@@ -382,7 +444,16 @@ export default function Home() {
           </Box>
         </Box>
 
-        <Box p={6} borderRadius="lg" bg="white" boxShadow="lg" border="1px" borderColor="purple.100">
+        <Box 
+          id="database"
+          p={6} 
+          borderRadius="lg" 
+          bg="white" 
+          boxShadow="lg" 
+          border="1px" 
+          borderColor="purple.100"
+          scroll-margin-top="2rem"
+        >
           <HStack spacing={8} align="flex-start">
             {/* Left Column */}
             <VStack spacing={4} align="stretch" flex="1">
@@ -390,7 +461,7 @@ export default function Home() {
                 <Box p={1.5} bg="purple.100" borderRadius="md">
                   <Text fontSize="sm" color="purple.600">📝</Text>
                 </Box>
-                <Heading size="sm">2. MCQ Database</Heading>
+                <Heading size="sm">MCQ Database</Heading>
               </HStack>
 
               <Box>
@@ -459,12 +530,21 @@ export default function Home() {
           </HStack>
         </Box>
 
-        <Box p={6} borderRadius="lg" bg="white" boxShadow="lg" border="1px" borderColor="purple.100">
+        <Box 
+          id="config"
+          p={6} 
+          borderRadius="lg" 
+          bg="white" 
+          boxShadow="lg" 
+          border="1px" 
+          borderColor="purple.100"
+          scroll-margin-top="2rem"
+        >
           <HStack spacing={2} mb={4}>
             <Box p={1.5} bg="purple.100" borderRadius="md">
               <Text fontSize="sm" color="purple.600">⚙️</Text>
             </Box>
-            <Heading size="sm">3. LLMs Configuration</Heading>
+            <Heading size="sm">LLMs Configuration</Heading>
           </HStack>
 
           <VStack spacing={4} align="stretch">
@@ -537,8 +617,71 @@ export default function Home() {
           </VStack>
         </Box>
 
+        <Box 
+          id="evaluation"
+          p={6} 
+          borderRadius="lg" 
+          bg="white" 
+          boxShadow="lg" 
+          border="1px" 
+          borderColor="purple.100"
+          scroll-margin-top="2rem"
+        >
+          <HStack spacing={2} mb={6}>
+            <Box p={1.5} bg="purple.100" borderRadius="md">
+              <Text fontSize="sm" color="purple.600">📊</Text>
+            </Box>
+            <Heading size="sm">Evaluation Results</Heading>
+          </HStack>
+
+          {results.length === 0 ? (
+            <Box 
+              bg="purple.50" 
+              p={8} 
+              borderRadius="md" 
+              borderWidth="1px" 
+              borderColor="purple.200"
+              textAlign="center"
+            >
+              <VStack spacing={4}>
+                <Box
+                  w="48px"
+                  h="48px"
+                  bg="purple.100"
+                  borderRadius="full"
+                  display="flex"
+                  alignItems="center"
+                  justifyContent="center"
+                  mx="auto"
+                  mb={2}
+                >
+                  <Text fontSize="24px">📈</Text>
+                </Box>
+                <VStack spacing={1}>
+                  <Text fontSize="lg" fontWeight="medium" color="purple.700">
+                    No evaluation results yet
+                  </Text>
+                  <Text fontSize="sm" color="purple.600">
+                    Results will appear here once you start the evaluation
+                  </Text>
+                </VStack>
+              </VStack>
+            </Box>
+          ) : (
+            <Box>
+              {/* Results content will go here */}
+            </Box>
+          )}
+        </Box>
+
         {results.length > 0 && (
-          <Box p={6} borderRadius="xl" bg="white" boxShadow="sm">
+          <Box 
+            p={6} 
+            borderRadius="xl" 
+            bg="white" 
+            boxShadow="sm"
+            scroll-margin-top="2rem"
+          >
             <HStack spacing={3} mb={6}>
               <Box p={2} bg="purple.100" borderRadius="md">
                 <Text color="purple.600">📊</Text>
@@ -570,7 +713,9 @@ export default function Home() {
             </Table>
           </Box>
         )}
-      </VStack>
-    </Container>
+          </VStack>
+        </Box>
+      </Box>
+    </Flex>
   );
 }
