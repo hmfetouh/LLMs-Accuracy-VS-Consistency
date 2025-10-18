@@ -134,8 +134,8 @@ export default function Home() {
   const startEvaluation = async () => {
     if (!selectedFile || selectedModels.length === 0) {
       toast({
-        title: "Evaluation requirements",
-        description: "Please select both a CSV file and at least one model.",
+        title: "Cannot start evaluation",
+        description: "Please select a file and at least one model first.",
         status: "warning",
         duration: 3000,
       });
@@ -143,16 +143,17 @@ export default function Home() {
     }
 
     setIsEvaluating(true);
-    setProgress({ current: 0, total: questionCount });
     setResults([]);
+    setProgress({ current: 0, total: questionCount });
 
     try {
-      // Read the CSV file
-      const reader = new FileReader();
-      reader.onload = async (e) => {
-        const content = e.target?.result as string;
-        const lines = content.split('\\n').filter(line => line.trim());
-        const questions = lines.slice(1); // Skip header row
+      const fileContent = await selectedFile.text();
+      const lines = fileContent.split('\n').filter(line => line.trim());
+      const questions = lines.slice(1); // Skip header row
+      
+      if (questions.length === 0) {
+        throw new Error("No questions found in the file");
+      }
         
         const evaluationResults: EvaluationResult[] = [];
         
@@ -235,18 +236,28 @@ export default function Home() {
     const file = event.target.files?.[0];
     if (!file) return;
 
-    setSelectedFile(file);
-    const reader = new FileReader();
-    
-    reader.onload = (e) => {
-      const content = e.target?.result as string;
-      const lineCount = content.split('\n')
-        .filter(line => line.trim().length > 0)
-        .length - 1; // Subtract header row
+    try {
+      setSelectedFile(file);
+      const text = await file.text();
+      const lines = text.split('\n').filter(line => line.trim().length > 0);
+      const lineCount = Math.max(0, lines.length - 1); // Subtract header row, ensure non-negative
       setQuestionCount(lineCount);
-    };
-    
-    reader.readAsText(file);
+      
+      toast({
+        title: "File loaded successfully",
+        description: `Found ${lineCount} questions in the file`,
+        status: "success",
+        duration: 3000,
+      });
+    } catch (error) {
+      console.error('Error reading file:', error);
+      toast({
+        title: "Error reading file",
+        description: "Please make sure the file is a valid CSV",
+        status: "error",
+        duration: 3000,
+      });
+    }
   };
 
   const verifyApiKey = async () => {
