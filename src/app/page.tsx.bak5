@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 import { AttachmentIcon, ChevronDownIcon, RepeatIcon, TriangleUpIcon } from "@chakra-ui/icons";
 import {
   Box,
@@ -36,19 +36,34 @@ import {
 
 type Provider = "openai" | "deepseek" | "openwebui";
 
+interface APIConfig {
+  provider: Provider;
+  apiKey: string;
+  baseUrl?: string;
+}
+
+interface SavedAPIConfig extends APIConfig {
+  id: string;
+  maskedKey: string;
+}
+
 interface Model {
   id: string;
   name: string;
   provider: Provider;
 }
 
-interface StoredApiConfig {
-  id: string;
-  provider: Provider;
-  key: string;
-  maskedKey: string;
-  baseUrl?: string;
-}
+// Get default base URL for each provider
+const getDefaultBaseUrl = (provider: Provider): string => {
+  switch (provider) {
+    case "openai":
+      return "https://api.openai.com/v1";
+    case "deepseek":
+      return "https://api.deepseek.com/v1";
+    case "openwebui":
+      return "http://localhost:3001/v1";
+  }
+};
 
 const NoFileSelected = () => (
   <Box 
@@ -81,37 +96,33 @@ const NoFileSelected = () => (
   </Box>
 );
 
-// Helper function to deduplicate models by ID
-const deduplicateModelsById = (models: Model[]): Model[] => {
-  const uniqueModels: Model[] = [];
-  const seenIds = new Set<string>();
-  
-  for (const model of models) {
-    if (!seenIds.has(model.id)) {
-      seenIds.add(model.id);
-      uniqueModels.push(model);
-    }
-  }
-  
-  return uniqueModels;
-};
-
 interface EvaluationResult {
   questionId: string;
   modelResults: Record<string, boolean>;
 }
 
-interface ApiConfig {
-  key: string;
+type Provider = "openai" | "deepseek" | "openwebui";
+
+interface APIConfig {
+  provider: Provider;
+  apiKey: string;
   baseUrl?: string;
 }
 
-interface StoredApiConfig {
+interface SavedAPIConfig extends APIConfig {
   id: string;
-  provider: Provider;
-  key: string;
   maskedKey: string;
-  baseUrl?: string;
+}
+
+interface Model {
+  id: string;
+  name: string;
+  provider: Provider;
+}
+
+interface EvaluationResult {
+  questionId: string;
+  modelResults: Record<string, boolean>;
 }
 
 export default function Home() {
@@ -127,76 +138,29 @@ export default function Home() {
   const [isEvaluating, setIsEvaluating] = useState(false);
   const [progress, setProgress] = useState({ current: 0, total: 0 });
   const [modelSearch, setModelSearch] = useState("");
-  const [currentProvider, setCurrentProvider] = useState<"openai" | "deepseek" | "openwebui">("openai");
-  const [apiConfigs, setApiConfigs] = useState<Record<string, ApiConfig>>({
-    openai: { key: "", baseUrl: "https://api.openai.com/v1" },
-    deepseek: { key: "", baseUrl: "https://api.deepseek.com/v1" },
-    openwebui: { key: "", baseUrl: "http://localhost:3001/v1" },
+  const [currentProvider, setCurrentProvider] = useState<Provider>("openai");
+  // Load saved API configurations from local storage
+  const [savedApiConfigs, setSavedApiConfigs] = useState<SavedAPIConfig[]>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('apiConfigs');
+      return saved ? JSON.parse(saved) : [];
+    }
+    return [];
   });
   
-  // State for storing API configurations
-  const [storedApiConfigs, setStoredApiConfigs] = useState<StoredApiConfig[]>([]);
-  
-  // Load stored configs from localStorage after component mounts
-  useEffect(() => {
-    const saved = localStorage.getItem('storedApiConfigs');
-    if (saved) {
-      try {
-        const parsedConfigs = JSON.parse(saved);
-        setStoredApiConfigs(parsedConfigs);
-      } catch (error) {
-        console.error("Error loading stored API configs:", error);
-      }
-    }
-    
-    // Load saved models from localStorage if available
-    const savedModels = localStorage.getItem('availableModels');
-    if (savedModels) {
-      try {
-        const parsedModels = JSON.parse(savedModels);
-        
-        // Ensure model IDs are unique before setting state
-        const uniqueModels = deduplicateModelsById(parsedModels);
-        
-        // Update localStorage if we had to deduplicate
-        if (uniqueModels.length !== parsedModels.length) {
-          localStorage.setItem('availableModels', JSON.stringify(uniqueModels));
-          console.log(`Removed ${parsedModels.length - uniqueModels.length} duplicate models`);
-        }
-        
-        setAvailableModels(uniqueModels);
-      } catch (error) {
-        console.error("Error loading saved models:", error);
-      }
-    }
-  }, []);
-  
-  // Load models from all stored configurations when storedApiConfigs changes
-  useEffect(() => {
-    if (storedApiConfigs.length > 0) {
-      // Only run once after initial config loading, not on every config change
-      // to prevent excessive API calls
-      const hasLoadedModels = localStorage.getItem('hasLoadedModels') === 'true';
-      if (!hasLoadedModels) {
-        console.log("Auto-loading models from stored configurations...");
-        verifyApiKey();
-        localStorage.setItem('hasLoadedModels', 'true');
-      }
-    }
-    
-    // Reset the hasLoadedModels flag when the component unmounts
-    // so models will be reloaded on page refresh
-    return () => {
-      localStorage.removeItem('hasLoadedModels');
-    };
-  }, [storedApiConfigs.length > 0 ? 'loaded' : 'empty']);
+  const [newApiConfig, setNewApiConfig] = useState<APIConfig>({
+    provider: "openai",
+    apiKey: "",
+    baseUrl: "",
+  });
   const toast = useToast();
 
-  const getApiKey = () => apiConfigs[currentProvider].key;
-  const getBaseUrl = () => apiConfigs[currentProvider].baseUrl || "";
-  const getDefaultBaseUrl = (provider?: Provider) => {
-    const providerToUse = provider || currentProvider;
-    switch (providerToUse) {
+  const getApiConfig = (provider: Provider) => {
+    return apiConfigs.find(config => config.provider === provider);
+  };
+
+  const getDefaultBaseUrl = (provider: Provider) => {
+    switch (provider) {
       case "openai":
         return "https://api.openai.com/v1";
       case "deepseek":
@@ -204,107 +168,6 @@ export default function Home() {
       case "openwebui":
         return "http://localhost:3001/v1";
     }
-  };
-
-  const updateApiKey = (key: string) => {
-    setApiConfigs(prev => ({
-      ...prev,
-      [currentProvider]: { ...prev[currentProvider], key }
-    }));
-  };
-
-  const updateBaseUrl = (baseUrl: string) => {
-    setApiConfigs(prev => ({
-      ...prev,
-      [currentProvider]: { ...prev[currentProvider], baseUrl }
-    }));
-  };
-  
-  // Add API configuration, replace existing from same provider, and load models
-  const addApiConfig = async () => {
-    const key = getApiKey();
-    if (!key) {
-      toast({
-        title: "API Key Required",
-        description: "Please enter an API key",
-        status: "error",
-        duration: 3000,
-      });
-      return;
-    }
-    
-    const baseUrl = getBaseUrl() || getDefaultBaseUrl();
-    // Generate a stable ID using timestamp + random digits
-    const id = Date.now().toString() + '-' + (Math.floor(Math.random() * 1000)).toString().padStart(3, '0');
-    const maskedKey = key.substring(0, 6) + "..." + key.substring(key.length - 6);
-    
-    const newConfig: StoredApiConfig = {
-      id,
-      provider: currentProvider,
-      key,
-      maskedKey,
-      baseUrl
-    };
-    
-    // Remove any existing config with the same provider
-    const filteredConfigs = storedApiConfigs.filter(config => config.provider !== currentProvider);
-    const updatedConfigs = [...filteredConfigs, newConfig];
-    setStoredApiConfigs(updatedConfigs);
-    
-    // Save to localStorage
-    localStorage.setItem('storedApiConfigs', JSON.stringify(updatedConfigs));
-    
-    try {
-      // Automatically verify the API key and load models
-      await verifyApiKey(id);
-      
-      toast({
-        title: "API Configuration Saved",
-        description: `${currentProvider} API models loaded`,
-        status: "success",
-        duration: 3000,
-      });
-    } catch (error) {
-      console.error("Error loading models after adding API config:", error);
-      toast({
-        title: "API Configuration Saved",
-        description: "Configuration saved but couldn't load models. Try again.",
-        status: "warning",
-        duration: 3000,
-      });
-    }
-  };
-  
-  // Remove an API configuration and its models
-  const removeApiConfig = (id: string) => {
-    const configToRemove = storedApiConfigs.find(config => config.id === id);
-    if (!configToRemove) return;
-    
-    // Remove configuration
-    const updatedConfigs = storedApiConfigs.filter(config => config.id !== id);
-    setStoredApiConfigs(updatedConfigs);
-    localStorage.setItem('storedApiConfigs', JSON.stringify(updatedConfigs));
-    
-    // Remove models from this provider
-    setAvailableModels(prev => {
-      const updatedModels = prev.filter(model => model.provider !== configToRemove.provider);
-      // Update localStorage
-      localStorage.setItem('availableModels', JSON.stringify(updatedModels));
-      return updatedModels;
-    });
-    
-    // Remove any selected models from this provider
-    setSelectedModels(prev => prev.filter(model => model.provider !== configToRemove.provider));
-    
-    toast({
-      title: "API Configuration Removed",
-      description: `${configToRemove.provider === 'openai' ? 'OpenAI' : 
-                     configToRemove.provider === 'deepseek' ? 'DeepSeek' : 
-                     configToRemove.provider === 'openwebui' ? 'Open WebUI' : 
-                     configToRemove.provider} configuration and models removed`,
-      status: "info",
-      duration: 3000,
-    });
   };
 
   const startEvaluation = async () => {
@@ -382,10 +245,8 @@ export default function Home() {
           setResults([...evaluationResults]);
         }
 
-        // Scroll to results section - use setTimeout to avoid hydration issues
-        setTimeout(() => {
-          document.getElementById('evaluation')?.scrollIntoView({ behavior: 'smooth' });
-        }, 0);
+        // Scroll to results section
+        document.getElementById('evaluation')?.scrollIntoView({ behavior: 'smooth' });
         
         toast({
           title: "Evaluation completed",
@@ -427,162 +288,56 @@ export default function Home() {
     reader.readAsText(file);
   };
 
-  const verifyApiKey = async (configId?: string) => {
+    const verifyApiKey = async () => {
+    const config = getApiConfig(currentProvider);
+    if (!config) {
+      toast({
+        title: "No API Configuration",
+        description: "Please add an API configuration first",
+        status: "warning",
+        duration: 3000,
+      });
+      return;
+    }
+
     setIsLoading(true);
-    
+    const baseUrl = config.baseUrl || getDefaultBaseUrl(currentProvider);
+
     try {
-      let newModels: Model[] = [];
-      let totalModelCount = 0;
-      let configsToVerify: StoredApiConfig[] = [];
-      
-      // Determine which configs to verify
-      if (configId) {
-        // Verify just one specific config
-        const config = storedApiConfigs.find(config => config.id === configId);
-        if (!config) {
-          // The config might have been removed, so let's use the current provider settings instead
-          console.warn(`API Configuration with ID ${configId} not found. Using current provider settings.`);
-          
-          // If we have configs for the current provider, use those
-          const currentProviderConfigs = storedApiConfigs.filter(c => c.provider === currentProvider);
-          if (currentProviderConfigs.length > 0) {
-            configsToVerify = [currentProviderConfigs[0]];
-          } else {
-            // Otherwise fall back to the current form values
-            const apiKey = getApiKey();
-            if (!apiKey) {
-              throw new Error("Please enter an API key");
-            }
-            // Create a temporary config for verification
-            configsToVerify = [{
-              id: 'temp-' + Date.now(),
-              provider: currentProvider,
-              key: apiKey,
-              maskedKey: apiKey.substring(0, 6) + "..." + apiKey.substring(apiKey.length - 6),
-              baseUrl: getBaseUrl()
-            }];
-          }
-        } else {
-          configsToVerify = [config];
-        }
-      } else if (storedApiConfigs.length > 0) {
-        // Verify all stored configs
-        configsToVerify = storedApiConfigs;
-      } else {
-        // Fallback to current provider settings if no stored configs
-        const apiKey = getApiKey();
-        if (!apiKey) {
-          throw new Error("Please enter an API key");
-        }
-        // Create a temporary config for verification
-        configsToVerify = [{
-          id: 'temp',
-          provider: currentProvider,
-          key: apiKey,
-          maskedKey: apiKey.substring(0, 6) + "..." + apiKey.substring(apiKey.length - 6),
-          baseUrl: getBaseUrl()
-        }];
-      }
-      
-      // Process each config to fetch models
-      for (const config of configsToVerify) {
-        const apiKey = config.key;
-        const baseUrl = config.baseUrl || getDefaultBaseUrl(config.provider as Provider);
-        const provider = config.provider as Provider;
-        
-        try {
-          const response = await fetch(`${baseUrl}/models`, {
-            headers: {
-              Authorization: `Bearer ${apiKey}`,
-            },
-          });
-          
-          if (!response.ok) {
-            console.error(`Failed to fetch models for ${provider}: ${response.status}`);
-            continue; // Skip this provider but continue with others
-          }
-          
-          const data = await response.json();
-          const providerModels = data.data.map((model: any) => {
-            // Check if model.id already contains the provider name to avoid duplication
-            const modelAlreadyHasProvider = model.id.toLowerCase().includes(provider.toLowerCase());
-            
-            return {
-              // Create a unique ID that avoids duplication
-              id: modelAlreadyHasProvider ? `provider-${provider}-${model.id}` : `${provider}-${model.id}`,
-              name: model.id,
-              provider: provider,
-            };
-          });
-          
-          newModels = [...newModels, ...providerModels];
-          totalModelCount += providerModels.length;
-        } catch (error) {
-          console.error(`Error fetching models for ${provider}:`, error);
-          // Continue with other providers
-        }
-      }
-      
-      // If checking a specific config, only update models from that provider
-      // Otherwise, replace all models with new ones
-      setAvailableModels(prevModels => {
-        let updatedModels;
-        
-        if (configId) {
-          // If verifying a specific config, only update models from its provider
-          const config = storedApiConfigs.find(c => c.id === configId);
-          if (config) {
-            // Remove existing models from this provider
-            const filteredModels = prevModels.filter(m => m.provider !== config.provider);
-            // Add new models from this provider
-            updatedModels = [...filteredModels, ...newModels];
-          } else {
-            // If config not found, just add the new models
-            // Make sure we're not adding duplicates
-            const existingIds = new Set(prevModels.map(m => m.id));
-            const uniqueNewModels = newModels.filter(model => !existingIds.has(model.id));
-            updatedModels = [...prevModels, ...uniqueNewModels];
-          }
-        } else if (storedApiConfigs.length > 0 && configsToVerify.length === storedApiConfigs.length) {
-          // If verifying all configs, replace all models
-          updatedModels = newModels;
-        } else {
-          // For other cases, merge with existing models
-          const verifiedProviders = new Set(configsToVerify.map(c => c.provider));
-          const filteredModels = prevModels.filter(m => !verifiedProviders.has(m.provider));
-          
-          // Make sure we're not adding duplicates
-          const existingIds = new Set(filteredModels.map(m => m.id));
-          const uniqueNewModels = newModels.filter(model => !existingIds.has(model.id));
-          
-          updatedModels = [...filteredModels, ...uniqueNewModels];
-        }
-        
-        // Final safety check - ensure all IDs are unique
-        const deduplicatedModels = deduplicateModelsById(updatedModels);
-        
-        // Save models to localStorage for persistence
-        localStorage.setItem('availableModels', JSON.stringify(deduplicatedModels));
-        return deduplicatedModels;
+      const response = await fetch(`${baseUrl}/models`, {
+        headers: {
+          Authorization: `Bearer ${config.apiKey}`,
+        },
       });
       
-      if (newModels.length === 0) {
-        // Just warn instead of throwing an error
-        console.warn("No models could be loaded from any API configurations");
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
       }
       
+      const data = await response.json();
+      const models = data.data.map((model: any) => ({
+        id: model.id,
+        name: model.id,
+        provider: currentProvider,
+      }));
+
+      setAvailableModels(prev => {
+        const filteredPrev = prev.filter(m => m.provider !== currentProvider);
+        return [...filteredPrev, ...models];
+      });
+
       toast({
-        title: `Models loaded`,
-        description: `${totalModelCount} models available from ${configsToVerify.length} API configuration(s)`,
+        title: `${currentProvider} API key verified`,
+        description: `${models.length} models available`,
         status: "success",
         duration: 3000,
         isClosable: true,
       });
     } catch (error) {
-      console.error(`Error loading models:`, error);
+      console.error(`Error verifying ${currentProvider} API key:`, error);
       toast({
-        title: `Error loading models`,
-        description: error instanceof Error ? error.message : "Please check your API configurations",
+        title: `Error verifying ${currentProvider} API key`,
+        description: "Please check your API key and try again",
         status: "error",
         duration: 3000,
         isClosable: true,
@@ -592,8 +347,62 @@ export default function Home() {
     }
   };
 
+  const [apiConfigs, setApiConfigs] = useState<SavedAPIConfig[]>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('apiConfigs');
+      return saved ? JSON.parse(saved) : [];
+    }
+    return [];
+  });
+
+  const [newApiConfig, setNewApiConfig] = useState<APIConfig>({
+    provider: "openai",
+    apiKey: "",
+    baseUrl: "",
+  });
+
+  const handleSaveApiConfig = () => {
+    if (!newApiConfig.apiKey) {
+      toast({
+        title: "API Key Required",
+        description: "Please enter an API key",
+        status: "error",
+        duration: 3000,
+        isClosable: true,
+      });
+      return;
+    }
+
+    const id = Math.random().toString(36).substr(2, 9);
+    const maskedKey = newApiConfig.apiKey.slice(0, 4) + "..." + newApiConfig.apiKey.slice(-4);
+    
+    const newConfig: SavedAPIConfig = {
+      ...newApiConfig,
+      id,
+      maskedKey,
+    };
+
+    const updatedConfigs = [...apiConfigs, newConfig];
+    setApiConfigs(updatedConfigs);
+    localStorage.setItem('apiConfigs', JSON.stringify(updatedConfigs));
+
+    setNewApiConfig({
+      provider: "openai",
+      apiKey: "",
+      baseUrl: "",
+    });
+
+    toast({
+      title: "API Configuration Saved",
+      description: `Added new ${newConfig.provider} configuration`,
+      status: "success",
+      duration: 3000,
+      isClosable: true,
+    });
+  };
+
   const menuItems = [
-    { id: "models", title: "1. Add Models", icon: "🤖" },
+    { id: "models", title: "1. Select Models", icon: "🤖" },
     { id: "database", title: "2. MCQ Database", icon: "📝" },
     { id: "config", title: "3. Configuration", icon: "⚙️" },
     { id: "evaluation", title: "4. Evaluation", icon: "📊" }
@@ -614,30 +423,193 @@ export default function Home() {
         top={0}
       >
         <VStack spacing={6} align="stretch">
-          <Box mb={5}>
+          <Box mb={6}>
             <Heading size="md" color="purple.700" mb={1}>LLM Evaluation</Heading>
             <Text fontSize="sm" color="purple.600">Accuracy vs Consistency</Text>
           </Box>
 
-          <VStack spacing={2} align="stretch">
-            {menuItems.map((item) => (
+          <VStack spacing={6} align="stretch">
+            <Box>
+              <VStack spacing={2} align="stretch">
+                {menuItems.map((item) => (
+                  <Button
+                    key={item.id}
+                    variant="ghost"
+                    justifyContent="flex-start"
+                    py={3}
+                    pl={4}
+                    leftIcon={
+                      <Box p={1} bg="purple.100" borderRadius="md">
+                        <Text fontSize="sm">{item.icon}</Text>
+                      </Box>
+                    }
+                    onClick={() => {
+                      const element = document.getElementById(item.id);
+                      if (element) {
+                        element.scrollIntoView({ behavior: "smooth" });
+                      }
+                    }}
+                  >
+                    {item.title}
+                  </Button>
+                ))}
+              </VStack>
+            </Box>
+
+            {/* API Configuration Section */}
+            <Box mt="auto" pt={6} borderTop="1px" borderColor="purple.100">
+              <VStack spacing={4} align="stretch">
+                <Heading size="sm" color="purple.700">Add API Configuration</Heading>
+                
+                <FormControl>
+                  <FormLabel>Provider</FormLabel>
+                  <Select
+                    value={newApiConfig.provider}
+                    onChange={(e) => setNewApiConfig({
+                      ...newApiConfig,
+                      provider: e.target.value as Provider
+                    })}
+                  >
+                    <option value="openai">OpenAI</option>
+                    <option value="deepseek">DeepSeek</option>
+                    <option value="openwebui">OpenWebUI</option>
+                  </Select>
+                </FormControl>
+
+                <FormControl>
+                  <FormLabel>API Key</FormLabel>
+                  <Input
+                    type="password"
+                    value={newApiConfig.apiKey}
+                    onChange={(e) => setNewApiConfig({
+                      ...newApiConfig,
+                      apiKey: e.target.value
+                    })}
+                    placeholder="Enter API key"
+                  />
+                </FormControl>
+
+                <FormControl>
+                  <FormLabel>Base URL (Optional)</FormLabel>
+                  <Input
+                    value={newApiConfig.baseUrl}
+                    onChange={(e) => setNewApiConfig({
+                      ...newApiConfig,
+                      baseUrl: e.target.value
+                    })}
+                    placeholder={getDefaultBaseUrl(newApiConfig.provider)}
+                  />
+                </FormControl>
+
+                <Button
+                  colorScheme="purple"
+                  onClick={handleSaveApiConfig}
+                >
+                  Add API Configuration
+                </Button>
+
+                {savedApiConfigs.length > 0 && (
+                  <VStack spacing={2} align="stretch" mt={4}>
+                    <Text fontWeight="bold" color="purple.700">Saved Configurations</Text>
+                    {savedApiConfigs.map((config) => (
+                      <Box
+                        key={config.id}
+                        p={2}
+                        bg="purple.100"
+                        borderRadius="md"
+                        fontSize="sm"
+                      >
+                        <Text fontWeight="bold">{config.provider}</Text>
+                        <Text>API Key: {config.maskedKey}</Text>
+                        {config.baseUrl && <Text>URL: {config.baseUrl}</Text>}
+                      </Box>
+                    ))}
+                  </VStack>
+                )}
+              </VStack>
+            </Box>
+          </VStack>
+                  if (element) {
+                    element.scrollIntoView({ behavior: "smooth" });
+                  }
+                }}
+              >
+                {item.title}
+              </Button>
+            ))}
+          </VStack>
+
+          <Box mt="auto" pt={6} borderTop="1px" borderColor="purple.100">
+            <VStack spacing={4} align="stretch">
+              <Heading size="sm" color="purple.700">Add API Configuration</Heading>
+              
+              <FormControl>
+                <FormLabel>Provider</FormLabel>
+                <Select
+                  value={newApiConfig.provider}
+                  onChange={(e) => setNewApiConfig({
+                    ...newApiConfig,
+                    provider: e.target.value as Provider
+                  })}
+                >
+                  <option value="openai">OpenAI</option>
+                  <option value="deepseek">DeepSeek</option>
+                  <option value="openwebui">OpenWebUI</option>
+                </Select>
+              </FormControl>
+
+              <FormControl>
+                <FormLabel>API Key</FormLabel>
+                <Input
+                  type="password"
+                  value={newApiConfig.apiKey}
+                  onChange={(e) => setNewApiConfig({
+                    ...newApiConfig,
+                    apiKey: e.target.value
+                  })}
+                  placeholder="Enter API key"
+                />
+              </FormControl>
+
+              <FormControl>
+                <FormLabel>Base URL (Optional)</FormLabel>
+                <Input
+                  value={newApiConfig.baseUrl}
+                  onChange={(e) => setNewApiConfig({
+                    ...newApiConfig,
+                    baseUrl: e.target.value
+                  })}
+                  placeholder="Enter base URL"
+                />
+              </FormControl>
+
               <Button
-                key={item.id}
-                variant="ghost"
-                justifyContent="flex-start"
-                py={3}
-                pl={4}
-                leftIcon={
-                  <Box p={1} bg="purple.100" borderRadius="md">
-                    <Text fontSize="sm">{item.icon}</Text>
-                  </Box>
-                }
-                onClick={() => {
-                  // Use useEffect for DOM operations after hydration is complete
-                  setTimeout(() => {
-                    const element = document.getElementById(item.id);
-                    element?.scrollIntoView({ behavior: "smooth" });
-                  }, 0);
+                colorScheme="purple"
+                onClick={handleSaveApiConfig}
+              >
+                Add API Configuration
+              </Button>
+
+              {apiConfigs.length > 0 && (
+                <VStack spacing={2} align="stretch" mt={4}>
+                  <Text fontWeight="bold" color="purple.700">Saved Configurations</Text>
+                  {apiConfigs.map((config) => (
+                    <Box
+                      key={config.id}
+                      p={2}
+                      bg="purple.100"
+                      borderRadius="md"
+                      fontSize="sm"
+                    >
+                      <Text fontWeight="bold">{config.provider}</Text>
+                      <Text>API Key: {config.maskedKey}</Text>
+                    </Box>
+                  ))}
+                </VStack>
+              )}
+            </VStack>
+          </Box>
+                  element?.scrollIntoView({ behavior: "smooth" });
                 }}
                 _hover={{ bg: "purple.100" }}
                 color="purple.700"
@@ -648,112 +620,6 @@ export default function Home() {
               </Button>
             ))}
           </VStack>
-          
-          {/* API Configuration Section */}
-          <Box mt="auto" pt={7} borderTop="1px" borderColor="purple.100">
-            <VStack spacing={2} align="stretch">
-              <Text fontSize="s" fontWeight="600" color="purple.700" mb={1}>Load API Models</Text>
-
-              <FormControl size="sm">
-                <FormLabel fontSize="xs" mb={0.5} fontWeight="600">Provider</FormLabel>
-                <Select
-                  size="xs"
-                  value={currentProvider}
-                  onChange={(e) => setCurrentProvider(e.target.value as Provider)}
-                >
-                  <option value="openai">OpenAI</option>
-                  <option value="deepseek">DeepSeek</option>
-                  <option value="openwebui">OpenWebUI</option>
-                </Select>
-              </FormControl>
-
-              <FormControl size="sm">
-                <FormLabel fontSize="xs" mb={0.5} fontWeight="600">API Key</FormLabel>
-                <Input
-                  size="xs"
-                  type="password"
-                  value={getApiKey()}
-                  onChange={(e) => updateApiKey(e.target.value)}
-                  placeholder="Enter API key"
-                />
-              </FormControl>
-
-              <FormControl size="sm" mb={3}>
-                <FormLabel fontSize="xs" mb={0.5} fontWeight="600">Base URL (Optional)</FormLabel>
-                <Input
-                  size="xs"
-                  value={getBaseUrl()}
-                  onChange={(e) => updateBaseUrl(e.target.value)}
-                  placeholder={getDefaultBaseUrl()}
-                />
-              </FormControl>
-
-              <Button
-                size="xs"
-                colorScheme="purple"
-                onClick={addApiConfig}
-                isLoading={isLoading}
-                mb={3}
-              >
-                Load API Models
-              </Button>
-
-              {storedApiConfigs.length > 0 && (
-                <Box mt={2}>
-                  <Text fontSize="xs" fontWeight="bold" color="purple.700" mb={2}>Saved Configurations</Text>
-                  <VStack spacing={1.5} align="stretch">
-                    {storedApiConfigs.map((config) => (
-                      <Box
-                        key={config.id}
-                        bg="purple.50"
-                        borderRadius="md"
-                        fontSize="xs"
-                        py={1.5}
-                        px={2}
-                        position="relative"
-                        pr={7}
-                        borderWidth="1px"
-                        fontWeight={"medium"}
-                        borderColor="purple.200"
-                      >
-                        <VStack spacing={0.5} align="flex-start">
-                          <Text fontWeight="bold" color="purple.700">
-                            {config.provider === 'openai' ? 'OpenAI' : 
-                             config.provider === 'deepseek' ? 'DeepSeek' : 
-                             config.provider === 'openwebui' ? 'Open WebUI' : 
-                             config.provider}
-                          </Text>
-                          <Text color="gray.600" fontSize="10px" noOfLines={1} isTruncated>
-                            {config.maskedKey}
-                          </Text>
-                        </VStack>
-                        <Button 
-                          size="xs" 
-                          variant="unstyled"
-                          color="purple.600"
-                          fontSize="10px"
-                          onClick={() => removeApiConfig(config.id)}
-                          position="absolute"
-                          right={0}
-                          top="8px"
-                          width="20px"
-                          height="20px"
-                          minWidth="0"
-                          p={0}
-                          display="flex"
-                          alignItems="center"
-                          justifyContent="center"
-                          _hover={{ color: "red.500" }}
-                        >
-                          ✕
-                        </Button>
-                      </Box>
-                    ))}
-                  </VStack>
-                </Box>
-              )}
-            </VStack>
-          </Box>
         </VStack>
       </Box>
 
@@ -781,53 +647,88 @@ export default function Home() {
 
           <Box>
             <VStack spacing={4} align="stretch">
+              <HStack spacing={3} align="flex-end">
+                <FormControl flex="1">
+                  <FormLabel fontSize="sm">API Provider</FormLabel>
+                  <Select 
+                    value={currentProvider} 
+                    onChange={(e) => setCurrentProvider(e.target.value as "openai" | "deepseek" | "openwebui")}
+                    bg="gray.50"
+                    size="sm"
+                  >
+                    <option value="openai">OpenAI API</option>
+                    <option value="deepseek">DeepSeek API</option>
+                    <option value="openwebui">Open WebUI</option>
+                  </Select>
+                </FormControl>
+
+                <FormControl flex="2">
+                  <FormLabel fontSize="sm">API Key</FormLabel>
+                  <Input
+                    type="password"
+                    value={getApiKey()}
+                    onChange={(e) => updateApiKey(e.target.value)}
+                    placeholder="Enter your API key"
+                    bg="gray.50"
+                    size="sm"
+                  />
+                </FormControl>
+
+                <FormControl flex="2">
+                  <FormLabel fontSize="sm">Base URL (Optional)</FormLabel>
+                  <Input
+                    value={getBaseUrl()}
+                    onChange={(e) => updateBaseUrl(e.target.value)}
+                    placeholder={getDefaultBaseUrl()}
+                    bg="gray.50"
+                    size="sm"
+                  />
+                </FormControl>
+              </HStack>
+
               <FormControl>
-                <FormLabel fontSize="sm">Select Models from Available API Configurations</FormLabel>
-                <Box width="100%">
-                  <Menu matchWidth>
-                    <MenuButton
-                      as={Button}
-                      rightIcon={<ChevronDownIcon />}
-                      width="full"
-                      bg="gray.50"
-                      size="sm"
-                      textAlign="left"
-                      fontWeight="normal"
-                    >
-                      Select model
-                    </MenuButton>
-                    <MenuList bg="gray.50" p={0} mt={-2}>
-                      {availableModels.filter(model => !selectedModels.some(m => m.id === model.id)).length > 8 && (
-                        <Box 
-                          borderBottom="1px" 
-                          borderColor="gray.200"
-                          position="sticky"
-                          top={0}
-                          bg="gray.50"
-                          zIndex={1}
-                        >
-                          <Input
-                            placeholder="Search models..."
-                            size="sm"
-                            value={modelSearch}
-                            onChange={(e) => setModelSearch(e.target.value)}
-                            bg="white"
-                            border="none"
-                            borderRadius="0"
-                            _focus={{
-                              boxShadow: "none",
-                              bg: "white"
-                            }}
-                          />
-                        </Box>
-                      )}
-                      <Box maxH="250px" overflowY="auto">
-                        {availableModels.length === 0 ? (
-                          <Box p={3} textAlign="center" fontSize="sm" color="gray.500">
-                            No models available. Please load API models from the sidebar.
+                <FormLabel fontSize="sm">Add Model</FormLabel>
+                <HStack spacing={3} align="flex-end">
+                  <Box position="relative" flex="1">
+                    <Menu matchWidth>
+                      <MenuButton
+                        as={Button}
+                        rightIcon={<ChevronDownIcon />}
+                        width="full"
+                        bg="gray.50"
+                        size="sm"
+                        textAlign="left"
+                        fontWeight="normal"
+                      >
+                        Select model
+                      </MenuButton>
+                      <MenuList bg="gray.50" p={0}>
+                        {availableModels.filter(model => !selectedModels.some(m => m.id === model.id)).length > 8 && (
+                          <Box 
+                            borderBottom="1px" 
+                            borderColor="gray.200"
+                            position="sticky"
+                            top={0}
+                            bg="gray.50"
+                            zIndex={1}
+                          >
+                            <Input
+                              placeholder="Search models..."
+                              size="sm"
+                              value={modelSearch}
+                              onChange={(e) => setModelSearch(e.target.value)}
+                              bg="white"
+                              border="none"
+                              borderRadius="0"
+                              _focus={{
+                                boxShadow: "none",
+                                bg: "white"
+                              }}
+                            />
                           </Box>
-                        ) : (
-                          availableModels
+                        )}
+                        <Box maxH="250px" overflowY="auto">
+                          {availableModels
                             .filter(model => 
                               !selectedModels.some(m => m.id === model.id) &&
                               (model.name.toLowerCase().includes(modelSearch.toLowerCase()) ||
@@ -837,13 +738,7 @@ export default function Home() {
                               <MenuItem
                                 key={model.id}
                                 onClick={() => {
-                                  setSelectedModels(prev => {
-                                    // Check if the model is already selected (by ID)
-                                    if (prev.some(m => m.id === model.id)) {
-                                      return prev; // Don't add duplicates
-                                    }
-                                    return [...prev, model];
-                                  });
+                                  setSelectedModels(prev => [...prev, model]);
                                   setModelSearch("");
                                 }}
                                 py={2}
@@ -853,11 +748,21 @@ export default function Home() {
                                 {model.name}
                               </MenuItem>
                             ))
-                        )}
-                      </Box>
-                    </MenuList>
-                  </Menu>
-                </Box>
+                          }
+                        </Box>
+                      </MenuList>
+                    </Menu>
+                  </Box>
+                  <Button
+                    colorScheme="purple"
+                    onClick={verifyApiKey}
+                    isLoading={isLoading}
+                    size="sm"
+                    leftIcon={<RepeatIcon />}
+                  >
+                    Load Models
+                  </Button>
+                </HStack>
               </FormControl>
 
               {selectedModels.length > 0 && (
@@ -935,11 +840,7 @@ export default function Home() {
                 leftIcon={<AttachmentIcon />}
                 colorScheme="purple"
                 variant="solid"
-                onClick={() => {
-                  setTimeout(() => {
-                    document.getElementById('file-upload')?.click();
-                  }, 0);
-                }}
+                onClick={() => document.getElementById('file-upload')?.click()}
                 width="full"
                 size="sm"
               >
