@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, Fragment } from "react";
 
 // Simple function to estimate token count (approximately 4 characters per token)
 const estimateTokenCount = (text: string): number => {
@@ -46,6 +46,7 @@ interface Model {
   id: string;
   name: string;
   provider: Provider;
+  apiModelId?: string; // The actual model ID to send to the API
 }
 
 interface StoredApiConfig {
@@ -102,6 +103,29 @@ const deduplicateModelsById = (models: Model[]): Model[] => {
   return uniqueModels;
 };
 
+interface TrialResult {
+  answer: string;
+  correct: boolean;
+  tokens: number;
+  time: number; // in milliseconds
+  aborted?: boolean; // Flag to indicate if this trial was aborted
+}
+
+interface QuestionResult {
+  questionId: string;
+  question: string;
+  length: number; // character count
+  correctAnswer: string;
+  modelResults: Record<string, {
+    trial1: TrialResult;
+    trial2?: TrialResult;
+    trial3?: TrialResult;
+    isInconsistent?: boolean; // if answers differ across trials
+    additionalTrials?: TrialResult[]; // for inconsistent questions (7 more trials)
+    correctPercentage?: number; // percentage correct out of 10 trials
+  }>;
+}
+
 interface EvaluationResult {
   questionId: string;
   modelResults: Record<string, boolean>;
@@ -125,18 +149,20 @@ export default function Home() {
   const [availableModels, setAvailableModels] = useState<Model[]>([]);
   const [temperature, setTemperature] = useState(1.0);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [autoClearHistory, setAutoClearHistory] = useState(true);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [questionCount, setQuestionCount] = useState<number>(0);
-  const [systemPrompt, setSystemPrompt] = useState("Answer the following multiple choice question by providing only the letter of the correct answer (e.g A, B, C, or D).");
+  const [systemPrompt, setSystemPrompt] = useState("Your task is to output only the final answer(s) in the exact format below. Never include explanations, reasoning, or any additional text.\n\nALLOWED OUTPUT FORMATS:\n• For any question set (single or multiple):\n1. A\n2. B\n3. C\n...and so on.\n\nNUMBERING RULES:\n- Always include the question number (e.g., \"1. A\").\n- Number answers according to the original question order (1., 2., 3., etc.).\n- Maintain the same sequence of questions as presented.\n- Each answer must appear on its own line.\n- Do not include blank lines before, between, or after answers.\n\nPROHIBITED CONTENT:\n- Do NOT use square brackets [ ], parentheses ( ), curly brackets { }, or angle brackets < >.\n- Do NOT add periods, commas, colons, semicolons, or quotation marks in or after answers (except the period used in numbering, e.g., \"1. A\").\n- Do NOT output markdown formatting, bullet points, explanations, reasoning, or any text other than the required letters and numbering.\n\nREQUIREMENTS:\n- Use only uppercase letters A–Z.\n- Each line must follow the exact format: \"<question number>. <capital letter>\" (e.g., \"3. D\").\n- No trailing spaces or extra newlines.\n- Preserve the exact order of questions as given.\n\nVALID EXAMPLES:\nSingle question →\n1. C\n\nMultiple questions →\n1. A\n2. D\n3. B\n\nINVALID EXAMPLES:\n[A], (A), \"A\", A., 1) A, 1- A, 1. A., any explanation or markdown text.\n\nEND OF INSTRUCTIONS. Output must strictly follow the allowed format.");
   const [results, setResults] = useState<EvaluationResult[]>([]);
+  const [trialResults, setTrialResults] = useState<QuestionResult[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isEvaluating, setIsEvaluating] = useState(false);
+  const [shouldStopEvaluation, setShouldStopEvaluation] = useState(false);
+  const [abortController, setAbortController] = useState<AbortController | null>(null);
   const [progress, setProgress] = useState({ current: 0, total: 0 });
   const [modelSearch, setModelSearch] = useState("");
   const [activeResultTab, setActiveResultTab] = useState<"results" | "summary" | "charts" | "logs">("results");
   const [apiLogs, setApiLogs] = useState<Array<{
-    timestamp: string;
+    timestamp: number;
     model: string;
     provider: string;
     request: any;
@@ -171,7 +197,6 @@ export default function Home() {
         const parsedConfigs = JSON.parse(saved);
         setStoredApiConfigs(parsedConfigs);
       } catch (error) {
-        console.error("Error loading stored API configs:", error);
       }
     }
     
@@ -187,12 +212,10 @@ export default function Home() {
         // Update localStorage if we had to deduplicate
         if (uniqueModels.length !== parsedModels.length) {
           localStorage.setItem('availableModels', JSON.stringify(uniqueModels));
-          console.log(`Removed ${parsedModels.length - uniqueModels.length} duplicate models`);
         }
         
         setAvailableModels(uniqueModels);
       } catch (error) {
-        console.error("Error loading saved models:", error);
       }
     }
   }, []);
@@ -204,7 +227,6 @@ export default function Home() {
       // to prevent excessive API calls
       const hasLoadedModels = localStorage.getItem('hasLoadedModels') === 'true';
       if (!hasLoadedModels) {
-        console.log("Auto-loading models from stored configurations...");
         verifyApiKey();
         localStorage.setItem('hasLoadedModels', 'true');
       }
@@ -293,7 +315,6 @@ export default function Home() {
         duration: 3000,
       });
     } catch (error) {
-      console.error("Error loading models after adding API config:", error);
       toast({
         title: "API Configuration Saved",
         description: "Configuration saved but couldn't load models. Try again.",
@@ -414,7 +435,6 @@ export default function Home() {
     
     // Check for specific issues with Deepseek
     if (providersWithIssues.has('deepseek')) {
-      console.log("Deepseek API issue detected. Available configs:", storedApiConfigs);
     }
     
     return {
@@ -423,8 +443,178 @@ export default function Home() {
     };
   };
 
+  // Trial-based evaluation function
+  const stopEvaluation = () => {
+    setShouldStopEvaluation(true);
+    
+    // Abort any ongoing API requests
+    if (abortController) {
+      abortController.abort();
+    }
+    
+    // Immediately stop evaluation
+    setIsEvaluating(false);
+    setIsProcessing(false);
+    
+    toast({
+      title: "Evaluation Stopped",
+      description: "Evaluation has been stopped immediately.",
+      status: "warning",
+      duration: 3000,
+    });
+  };
+
+  const exportToExcel = () => {
+    if (trialResults.length === 0) {
+      toast({
+        title: "No Data to Export",
+        description: "Please run an evaluation first before exporting.",
+        status: "warning",
+        duration: 3000,
+      });
+      return;
+    }
+
+    try {
+      // Create CSV content
+      let csv = '';
+      
+      // Header row
+      const headerRow = ['#', 'Question', 'Len (Char)', 'Correct'];
+      selectedModels.forEach(model => {
+        headerRow.push(
+          `${model.name} - Tokens`,
+          `${model.name} - TTFT (ms)`,
+          `${model.name} - T1`,
+          `${model.name} - T2`,
+          `${model.name} - T3`,
+          `${model.name} - % of 10`
+        );
+      });
+      csv += headerRow.map(h => `"${h}"`).join(',') + '\n';
+      
+      // Data rows
+      trialResults.forEach((result, index) => {
+        const row = [
+          index + 1,
+          `"${result.question.replace(/"/g, '""')}"`,
+          result.length,
+          result.correctAnswer
+        ];
+        
+        selectedModels.forEach(model => {
+          const modelResult = result.modelResults[model.id];
+          if (modelResult) {
+            row.push(
+              modelResult.trial1?.tokens || '-',
+              modelResult.trial1?.time || '-',
+              modelResult.trial1?.answer || '-',
+              modelResult.trial2?.answer || '-',
+              modelResult.trial3?.answer || '-',
+              modelResult.correctPercentage !== undefined ? `${Math.round(modelResult.correctPercentage)}%` : '-'
+            );
+          } else {
+            row.push('-', '-', '-', '-', '-', '-');
+          }
+        });
+        
+        csv += row.join(',') + '\n';
+      });
+      
+      // Create blob and download
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const link = document.createElement('a');
+      const url = URL.createObjectURL(blob);
+      link.setAttribute('href', url);
+      link.setAttribute('download', `evaluation_results_${new Date().toISOString().slice(0, 10)}.csv`);
+      link.style.visibility = 'hidden';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      
+      toast({
+        title: "Export Successful",
+        description: "Results exported to CSV file",
+        status: "success",
+        duration: 3000,
+      });
+    } catch (error) {
+      toast({
+        title: "Export Failed",
+        description: "There was an error exporting the results",
+        status: "error",
+        duration: 3000,
+      });
+    }
+  };
+
+  const exportLogs = () => {
+    if (apiLogs.length === 0) {
+      toast({
+        title: "No Logs to Export",
+        description: "Please run an evaluation first to generate API logs.",
+        status: "warning",
+        duration: 3000,
+      });
+      return;
+    }
+
+    try {
+      // Create CSV content for logs
+      let csv = 'Timestamp,Provider,Model,Question ID,Question,Duration (ms),Temperature,Prompt Tokens,Completion Tokens,Total Tokens,Answer,Correct,Error\n';
+      
+      apiLogs.forEach(log => {
+        const timestamp = new Date(log.timestamp).toLocaleString();
+        const provider = log.provider || '';
+        const model = log.model || '';
+        const questionId = log.questionId || '';
+        const question = (log.question || '').replace(/"/g, '""'); // Escape quotes
+        const duration = log.duration || 0;
+        const temperature = log.temperature !== undefined ? log.temperature : '';
+        const promptTokens = log.promptTokens || 0;
+        const completionTokens = log.completionTokens || 0;
+        const totalTokens = log.totalTokens || 0;
+        const answer = log.response?.answer || '';
+        const correct = log.response?.correct ? 'Yes' : 'No';
+        const error = log.error ? log.error.replace(/"/g, '""') : '';
+        
+        csv += `"${timestamp}","${provider}","${model}","${questionId}","${question}",${duration},${temperature},${promptTokens},${completionTokens},${totalTokens},"${answer}","${correct}","${error}"\n`;
+      });
+
+      // Create blob and download
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const link = document.createElement('a');
+      const url = URL.createObjectURL(blob);
+      
+      link.setAttribute('href', url);
+      link.setAttribute('download', `api_logs_${new Date().toISOString().slice(0, 10)}.csv`);
+      link.style.visibility = 'hidden';
+      
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+
+      toast({
+        title: "Logs Exported Successfully",
+        description: `${apiLogs.length} API log${apiLogs.length !== 1 ? 's' : ''} exported to CSV`,
+        status: "success",
+        duration: 3000,
+      });
+    } catch (error) {
+      toast({
+        title: "Export Failed",
+        description: "There was an error exporting the logs",
+        status: "error",
+        duration: 3000,
+      });
+    }
+  };
+
   const startEvaluation = async () => {
-    // Check that we have both a file and at least one model selected
+    // Reset stop flag
+    setShouldStopEvaluation(false);
+    
+    // Validation checks
     if (!selectedFile) {
       toast({
         title: "File Required",
@@ -473,19 +663,31 @@ export default function Home() {
       return;
     }
     
-    console.log(`Starting evaluation with ${selectedModels.length} models and file: ${selectedFile.name}`);
-
-    // Set both global and local loading states
-    setIsProcessing(true);
-    setIsEvaluating(true);
-    setProgress({ current: 0, total: questionCount });
-    setResults([]);
 
     try {
       // Read the CSV file
       const reader = new FileReader();
       reader.onload = async (e) => {
-        const content = e.target?.result as string;
+        try {
+          // Create AbortController for this evaluation
+          const controller = new AbortController();
+          setAbortController(controller);
+          
+          // Local flag to track if evaluation was stopped
+          let wasStopped = false;
+          
+          // Set both global and local loading states INSIDE the callback
+          setIsProcessing(true);
+          setIsEvaluating(true);
+          
+          // Force a small delay to ensure state updates
+          setTimeout(() => {
+          }, 100);
+          setProgress({ current: 0, total: questionCount * 3 * selectedModels.length }); // 3 trials per question per model
+          setResults([]);
+          setTrialResults([]);
+          setApiLogs([]);
+          const content = e.target?.result as string;
         // Handle both Windows (\r\n) and Unix (\n) line endings
         const lines = content.replace(/\r\n/g, '\n').split('\n').filter(line => line.trim());
         
@@ -502,8 +704,6 @@ export default function Home() {
         }
         
         // Log the raw lines for debugging
-        console.log("CSV Headers:", lines[0]);
-        console.log("First data line:", lines[1]);
         
         // First parse the header row to determine column indices
         const headerLine = lines[0];
@@ -529,7 +729,6 @@ export default function Home() {
         // Add the last header part
         headerParts.push(currentHeader.trim().toLowerCase());
         
-        console.log("Parsed headers:", headerParts);
         
         // Find the indices of required columns - more flexible matching
         let idIndex = headerParts.findIndex(h => h.includes('id'));
@@ -547,23 +746,19 @@ export default function Home() {
           const lenIndex = headerParts.findIndex(h => h.includes('len'));
           
           if (fromIndex === 0 && idIndex === 1 && questionIndex === 2 && lenIndex === 3 && answerIndex === 4) {
-            console.log("Detected standard CSV format: From, ID, Question, Len (Char), Correct Answer");
           } else if (idIndex === -1 && headerParts[1]?.toLowerCase() === 'id') {
             // If ID column wasn't detected but it's the second column
             idIndex = 1;
-            console.log("Fixed ID column detection (position 1)");
           }
           
           if (questionIndex === -1 && headerParts[2]?.toLowerCase() === 'question') {
             // If Question column wasn't detected but it's the third column
             questionIndex = 2;
-            console.log("Fixed Question column detection (position 2)");
           }
           
           if (answerIndex === -1 && headerParts[4]?.toLowerCase().includes('correct')) {
             // If Correct Answer column wasn't detected but it's the fifth column
             answerIndex = 4;
-            console.log("Fixed Correct Answer column detection (position 4)");
           }
         }
         
@@ -571,11 +766,10 @@ export default function Home() {
         const missingColumns = [];
         if (idIndex === -1) missingColumns.push("ID");
         if (questionIndex === -1) missingColumns.push("Question");
-        if (answerIndex === -1) missingColumns.push("Correct Answer");
+        if (answerIndex === -1) missingColumns.push("Correct");
         
         if (missingColumns.length > 0) {
           const missingColumnsStr = missingColumns.join(", ");
-          console.error(`Missing columns: ${missingColumnsStr}`);
           
           toast({
             title: "Invalid CSV format",
@@ -588,322 +782,727 @@ export default function Home() {
           return;
         }
         
-        console.log(`Found columns - ID: ${idIndex}, Question: ${questionIndex}, Answer: ${answerIndex}`);
         
         const questions = lines.slice(1); // Skip header row
-        console.log(`Processing ${questions.length} questions from CSV file`);
         
-        const evaluationResults: EvaluationResult[] = [];
+        // Parse all questions into array
+        const parsedQuestions: Array<{id: string, question: string, answer: string}> = [];
         
-        // Process each question
         for (let i = 0; i < questions.length; i++) {
-          // Parse each line with the CSV parser
-          let parts: string[] = [];
-          const line = questions[i];
-          let currentPart = '';
-          inQuotes = false;
-          
           try {
-            console.log(`Parsing line ${i+1}: ${line.substring(0, 50)}...`);
+            const parts: string[] = [];
+            let current = '';
+            let inQuotes = false;
             
-            for (let j = 0; j < line.length; j++) {
-              const char = line[j];
-              
+            for (let j = 0; j < questions[i].length; j++) {
+              const char = questions[i][j];
               if (char === '"') {
                 inQuotes = !inQuotes;
               } else if (char === ',' && !inQuotes) {
-                parts.push(currentPart.trim());
-                currentPart = '';
+                parts.push(current.trim());
+                current = '';
               } else {
-                currentPart += char;
+                current += char;
               }
             }
+            parts.push(current.trim());
             
-            // Don't forget the last part
-            parts.push(currentPart.trim());
-            
-            console.log(`Parsed ${parts.length} fields from line ${i+1}`);
-            
-            // Check if we have enough parts for all columns
             const maxIndex = Math.max(idIndex, questionIndex, answerIndex);
-            if (parts.length <= maxIndex) {
-              console.warn(`Line ${i+2} has only ${parts.length} fields, but we need at least ${maxIndex + 1} fields`);
-              console.warn(`Skipping invalid question at line ${i+2}: ${questions[i].substring(0, 50)}...`);
-              continue;
+            if (parts.length > maxIndex) {
+              parsedQuestions.push({
+                id: parts[idIndex].trim(),
+                question: parts[questionIndex].trim(),
+                answer: parts[answerIndex].trim().toUpperCase()
+              });
             }
           } catch (error) {
-            console.error(`Error parsing line ${i+1}:`, error);
-            console.error(`Line content: ${questions[i].substring(0, 100)}...`);
-            continue;
+          }
+        }
+        
+        
+        // Initialize trial results array
+        const trialResultsArray: QuestionResult[] = parsedQuestions.map(q => ({
+          questionId: q.id,
+          question: q.question,
+          length: q.question.length,
+          correctAnswer: q.answer,
+          modelResults: {}
+        }));
+
+        // Phase 1: Run 3 trials for each model
+        for (const model of selectedModels) {
+          // Check if user stopped evaluation
+          if (shouldStopEvaluation) {
+            wasStopped = true;
+            break;
           }
           
-          // Extract the required fields from the identified positions
-          const id = parts[idIndex];
-          const question = parts[questionIndex]; 
-          const correctAnswer = parts[answerIndex];
           
-          console.log(`Processing question ${i+1}/${questions.length}: ID=${id}, Answer=${correctAnswer}`);
-          console.log(`Processing question ${i+1}/${questions.length}: ID=${id}`);
-          
-          const modelResults: Record<string, boolean> = {};
-          
-          // Query each model
-          for (const model of selectedModels) {
-            // Variables for API logging
-            let apiStartTime = 0;
-            let apiRequestBody: {
-              model: string;
-              messages: Array<{role: string, content: string}>;
-              temperature: number;
-            } | null = null;
+          // Trial 1: Individual questions (1 per request)
+          for (let i = 0; i < parsedQuestions.length; i++) {
+            // Check if user stopped evaluation
+            if (shouldStopEvaluation) {
+              wasStopped = true;
+              break;
+            }
             
-            try {
-              // Get the active API key for this model's provider
-              const apiKey = getActiveApiKeyForProvider(model.provider as Provider);
-              if (!apiKey) {
-                throw new Error(`No API key available for ${model.provider}`);
-              }
-              
-              // Get the appropriate base URL
-              const storedConfig = storedApiConfigs.find(config => config.provider === model.provider);
-              const baseUrl = storedConfig?.baseUrl || apiConfigs[model.provider].baseUrl || getDefaultBaseUrl(model.provider as Provider);
-              
-              // Format the model ID correctly for the API request
-              const formattedModelId = formatModelIdForAPI(model.name, model.provider as Provider);
-              
-              // Log API call details for debugging (except the full API key)
-              console.log(`Making API call for model: ${model.name}, provider: ${model.provider}, baseUrl: ${baseUrl}`);
-              console.log(`Using model ID for API call: ${formattedModelId}`);
-              console.log(`Using API key starting with: ${apiKey.substring(0, 5)}...`);
-              
-              // Create AbortController for fetch timeout
-              const controller = new AbortController();
-              const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 second timeout
-              
-              // Prepare request for logging
-              apiRequestBody = {
-                model: formattedModelId,
-                messages: [
-                  { role: "system", content: systemPrompt },
-                  { role: "user", content: question }
-                ],
-                temperature: temperature
-              };
-              
-              apiStartTime = Date.now();
-              
-              try {
-                const response = await fetch(`${baseUrl}/chat/completions`, {
-                  method: 'POST',
-                  headers: {
-                    'Authorization': `Bearer ${apiKey}`,
-                    'Content-Type': 'application/json',
-                  },
-                  signal: controller.signal,
-                  body: JSON.stringify(apiRequestBody)
-                });
+            const q = parsedQuestions[i];
+            const trialResult = await runSingleQuestionTrial(model, q.question, q.answer, systemPrompt, q.id, controller.signal);
+            
+            if (!trialResultsArray[i].modelResults[model.id]) {
+              trialResultsArray[i].modelResults[model.id] = { trial1: trialResult };
+            } else {
+              trialResultsArray[i].modelResults[model.id].trial1 = trialResult;
+            }
+            
+            setProgress(prev => ({ ...prev, current: prev.current + 1 }));
+            setTrialResults([...trialResultsArray]);
+          }
 
-              if (!response.ok) {
-                // For any errors, try to get response body for more details
-                const errorText = await response.text().catch(() => "No error details available");
-                let errorData = null;
-                try {
-                  errorData = JSON.parse(errorText);
-                } catch (e) {
-                  // Not JSON, use as-is
-                }
+          // Check if user stopped evaluation
+          if (shouldStopEvaluation) {
+            wasStopped = true;
+            break;
+          }
+
+          // Trial 2: Batch questions (up to 10 per request)
+          const trial2Results = await runBatchedTrial(model, parsedQuestions, systemPrompt, 2, controller.signal);
+          trial2Results.forEach((result, index) => {
+            if (trialResultsArray[index].modelResults[model.id]) {
+              trialResultsArray[index].modelResults[model.id].trial2 = result;
+            }
+            setProgress(prev => ({ ...prev, current: prev.current + 1 }));
+          });
+          setTrialResults([...trialResultsArray]);
+
+          // Check if user stopped evaluation
+          if (shouldStopEvaluation) {
+            wasStopped = true;
+            break;
+          }
+
+          // Trial 3: Batch questions (up to 10 per request)
+          const trial3Results = await runBatchedTrial(model, parsedQuestions, systemPrompt, 3, controller.signal);
+          trial3Results.forEach((result, index) => {
+            if (trialResultsArray[index].modelResults[model.id]) {
+              trialResultsArray[index].modelResults[model.id].trial3 = result;
+            }
+            setProgress(prev => ({ ...prev, current: prev.current + 1 }));
+          });
+          setTrialResults([...trialResultsArray]);
+        }
+
+        // Check if user stopped evaluation before Phase 2
+        if (shouldStopEvaluation) {
+          wasStopped = true;
+          setIsEvaluating(false);
+          setIsProcessing(false);
+          setShouldStopEvaluation(false); // Reset stop flag
+          setAbortController(null);
+          toast({
+            title: "Evaluation Stopped",
+            description: "Evaluation was stopped. Partial results are available.",
+            status: "info",
+            duration: 3000,
+          });
+          return;
+        }
+
+        // Phase 2: Check for inconsistencies and run additional trials
+        const inconsistentQuestions: Array<{index: number, modelId: string}> = [];
+        
+        trialResultsArray.forEach((qResult, index) => {
+          Object.entries(qResult.modelResults).forEach(([modelId, modelResult]) => {
+            const answers = [
+              modelResult.trial1?.answer,
+              modelResult.trial2?.answer,
+              modelResult.trial3?.answer
+            ].filter(Boolean);
+            
+            const uniqueAnswers = new Set(answers);
+            if (uniqueAnswers.size > 1) {
+              modelResult.isInconsistent = true;
+              inconsistentQuestions.push({ index, modelId });
+            }
+          });
+        });
+
+        // Phase 3: Run 7 additional trials for inconsistent questions (BATCHED)
+        if (inconsistentQuestions.length > 0) {
+          
+          // Group inconsistent questions by model for batching
+          const inconsistentByModel = new Map<string, Array<{index: number, question: {id: string, question: string, answer: string}}>>();
+          
+          for (const {index, modelId} of inconsistentQuestions) {
+            if (!inconsistentByModel.has(modelId)) {
+              inconsistentByModel.set(modelId, []);
+            }
+            inconsistentByModel.get(modelId)!.push({
+              index,
+              question: parsedQuestions[index]
+            });
+          }
+          
+          // Update progress to account for 7 batched trials per model (not per question)
+          const totalAdditionalTrials = Array.from(inconsistentByModel.values())
+            .reduce((sum, questions) => sum + (Math.ceil(questions.length / 10) * 7), 0);
+          setProgress(prev => ({ ...prev, total: prev.total + totalAdditionalTrials }));
+          
+          // Run 7 additional trials for each model's inconsistent questions
+          for (const [modelId, modelInconsistentQuestions] of Array.from(inconsistentByModel.entries())) {
+            const model = selectedModels.find(m => m.id === modelId);
+            if (!model) continue;
+            
+            
+            // Run trials 4-10 (7 trials)
+            for (let trialNum = 4; trialNum <= 10; trialNum++) {
+              const trialResults = await runBatchedTrial(
+                model,
+                modelInconsistentQuestions.map((q: {index: number, question: {id: string, question: string, answer: string}}) => q.question),
+                systemPrompt,
+                trialNum,
+                controller.signal
+              );
+              
+              // Distribute results back to the corresponding questions
+              trialResults.forEach((result, idx) => {
+                const questionIndex = modelInconsistentQuestions[idx].index;
                 
-                // Handle specific error types
-                if (response.status === 401) {
-                  console.error(`Authentication error for model ${model.name} from ${model.provider}: API key may be invalid or expired`);
-                  toast({
-                    title: "Authentication Error",
-                    description: `Failed to authenticate with ${model.provider} API. Please check your API key.`,
-                    status: "error",
-                    duration: 5000,
-                    isClosable: true,
-                  });
-                  throw new Error(`Authentication error (HTTP 401) for ${model.provider} API. Please check your API key.`);
-                } else if (response.status === 404 || 
-                          (errorData?.error?.code === "model_not_found") || 
-                          (errorData?.error?.code === "invalid_request_error") ||
-                          (errorData?.error?.message && (
-                            errorData.error.message.includes("Model Not Exist") ||
-                            errorData.error.message.includes("model") && errorData.error.message.includes("exist") ||
-                            errorData.error.message.includes("model") && errorData.error.message.includes("found")
-                          ))) {
-                  // Model not found errors
-                  console.error(`Model not found: ${formattedModelId} for provider ${model.provider}`);
-                  
-                  // Provider-specific suggestions
-                  let suggestion = "";
-                  if (model.provider === "openai") {
-                    suggestion = "Try using gpt-3.5-turbo or gpt-4";
-                  } else if (model.provider === "deepseek") {
-                    suggestion = "Try using deepseek-chat or deepseek-coder";
-                  } else {
-                    suggestion = `Check available models for ${model.provider}`;
-                  }
-                  
-                  toast({
-                    title: "Model Not Found",
-                    description: `The model "${formattedModelId}" does not exist or you don't have access to it. ${suggestion}`,
-                    status: "error",
-                    duration: 7000,
-                    isClosable: true,
-                  });
-                  
-                  throw new Error(`Model not found: ${formattedModelId}. ${errorText}`);
-                } else {
-                  // For other errors
-                  console.error(`API error with ${model.provider}:`, errorText);
-                  throw new Error(`HTTP error! status: ${response.status}, Details: ${errorText}`);
+                if (!trialResultsArray[questionIndex].modelResults[modelId].additionalTrials) {
+                  trialResultsArray[questionIndex].modelResults[modelId].additionalTrials = [];
                 }
-              }
+                trialResultsArray[questionIndex].modelResults[modelId].additionalTrials!.push(result);
+              });
               
-              const data = await response.json();
-              const answer = data.choices[0].message.content.trim().toUpperCase();
-              modelResults[model.id] = answer === correctAnswer.toUpperCase();
+              setProgress(prev => ({ ...prev, current: prev.current + 1 }));
+              setTrialResults([...trialResultsArray]);
+            }
+            
+            // Calculate percentage correct out of 10 trials for each inconsistent question
+            for (const {index} of modelInconsistentQuestions) {
+              const modelResult = trialResultsArray[index].modelResults[modelId];
+              const allTrials = [
+                modelResult.trial1,
+                modelResult.trial2,
+                modelResult.trial3,
+                ...(modelResult.additionalTrials || [])
+              ].filter(Boolean) as TrialResult[];
               
-              // Extract token usage information if available
-              const promptTokens = data.usage?.prompt_tokens || estimateTokenCount(systemPrompt + question);
-              const completionTokens = data.usage?.completion_tokens || estimateTokenCount(data.choices[0].message.content);
-              const totalTokens = data.usage?.total_tokens || (promptTokens + completionTokens);
+              // Filter out aborted trials from the calculation
+              const nonAbortedTrials = allTrials.filter(t => !t.aborted);
               
-              // Log successful API call
-              const duration = Date.now() - apiStartTime;
-              setApiLogs(prev => [...prev, {
-                timestamp: new Date().toISOString(),
-                model: model.name,
-                provider: model.provider,
-                question: question, // Store the full question
-                questionId: id, // Store the question ID
-                correctAnswer: correctAnswer, // Store the correct answer
-                expanded: false, // Initialize as collapsed
-                temperature: apiRequestBody?.temperature || temperature, // Store the temperature setting
-                showFullRequest: false, // Initialize as not showing full request
-                promptTokens,
-                completionTokens,
-                totalTokens,
-                request: {
-                  ...apiRequestBody,
-                  messages: [
-                    { role: "system", content: systemPrompt.length > 50 ? systemPrompt.substring(0, 50) + '...' : systemPrompt },
-                    { role: "user", content: question.length > 50 ? question.substring(0, 50) + '...' : question }
-                  ]
-                },
-                response: {
-                  answer: answer,
-                  correct: answer === correctAnswer.toUpperCase(),
-                  content: data.choices[0].message.content,
-                },
-                duration
-              }]);
-
-              if (autoClearHistory) {
-                // Clear context for next question
-                await new Promise(resolve => setTimeout(resolve, 500));
-              }
-              } finally {
-                clearTimeout(timeoutId);
-              }
-            } catch (error) {
-              console.error(`Error with model ${model.name}:`, error);
-              modelResults[model.id] = false;
-              
-              // Log error in API logs
-              const duration = Date.now() - apiStartTime;
-              // Estimate token counts for errors
-              const promptTokens = estimateTokenCount(systemPrompt + question);
-              const completionTokens = 0; // No completion on error
-              const totalTokens = promptTokens;
-              
-              setApiLogs(prev => [...prev, {
-                timestamp: new Date().toISOString(),
-                model: model.name,
-                provider: model.provider,
-                question: question, // Store the full question
-                questionId: id, // Store the question ID
-                correctAnswer: correctAnswer, // Store the correct answer
-                expanded: false, // Initialize as collapsed
-                temperature: apiRequestBody?.temperature || temperature, // Store the temperature setting
-                showFullRequest: false, // Initialize as not showing full request
-                promptTokens,
-                completionTokens,
-                totalTokens,
-                request: {
-                  ...apiRequestBody,
-                  messages: [
-                    { role: "system", content: systemPrompt.length > 50 ? systemPrompt.substring(0, 50) + '...' : systemPrompt },
-                    { role: "user", content: question.length > 50 ? question.substring(0, 50) + '...' : question }
-                  ]
-                },
-                error: error instanceof Error ? error.message : 'Unknown error',
-                duration
-              }]);
-              
-              // Display appropriate error message based on error type
-              if (error instanceof Error) {
-                if (error.name === 'AbortError') {
-                  toast({
-                    title: `Model Timeout`,
-                    description: `${model.name} from ${model.provider} timed out after 60 seconds.`,
-                    status: "warning",
-                    duration: 5000,
-                    isClosable: true,
-                  });
-                } else if (!error.message.includes("Authentication") && !error.message.includes("not found")) {
-                  // Only show general errors if not already handled elsewhere
-                  toast({
-                    title: `Model Error`,
-                    description: `Error with ${model.name}: ${error.message.substring(0, 100)}${error.message.length > 100 ? '...' : ''}`,
-                    status: "error",
-                    duration: 5000,
-                    isClosable: true,
-                  });
-                }
+              // Only calculate percentage if we have non-aborted trials
+              if (nonAbortedTrials.length > 0) {
+                const correctCount = nonAbortedTrials.filter(t => t.correct).length;
+                modelResult.correctPercentage = (correctCount / nonAbortedTrials.length) * 100;
               }
             }
           }
           
-          evaluationResults.push({
-            questionId: id,
-            modelResults
-          });
-
-          setProgress(prev => ({ ...prev, current: i + 1 }));
-          setResults([...evaluationResults]);
+          setTrialResults([...trialResultsArray]);
         }
 
-        // Scroll to results section - use setTimeout to avoid hydration issues
+        setTrialResults(trialResultsArray);
+        
+        // Scroll to results section
         setTimeout(() => {
           document.getElementById('evaluation')?.scrollIntoView({ behavior: 'smooth' });
         }, 0);
         
-        const actualQuestionsProcessed = evaluationResults.length;
-        const actualModelsUsed = selectedModels.length;
+        // Only show completion message if evaluation wasn't stopped
+        // Check both the local flag and if the controller was aborted
+        if (!wasStopped && !controller.signal.aborted) {
+          toast({
+            title: "Trial evaluation completed",
+            description: `Processed ${parsedQuestions.length} questions with ${selectedModels.length} models. Found ${inconsistentQuestions.length} inconsistent responses.`,
+            status: "success",
+            duration: 5000,
+          });
+        }
         
-        toast({
-          title: "Evaluation completed",
-          description: `Processed ${actualQuestionsProcessed} questions with ${actualModelsUsed} models`,
-          status: "success",
-          duration: 5000,
-        });
+        // Reset evaluation state - MOVED FROM OUTSIDE
+        setIsEvaluating(false);
+        setIsProcessing(false);
+        setShouldStopEvaluation(false); // Reset stop flag
+        setAbortController(null);
+        } catch (callbackError) {
+          setIsEvaluating(false);
+          setIsProcessing(false);
+          setShouldStopEvaluation(false); // Reset stop flag
+          setAbortController(null);
+          toast({
+            title: "Evaluation failed",
+            description: "There was an error during evaluation processing. Please check the console for details.",
+            status: "error",
+            duration: 5000,
+          });
+        }
       };
       
       reader.readAsText(selectedFile);
     } catch (error) {
-      console.error('Evaluation error:', error);
+      setIsEvaluating(false);
+      setIsProcessing(false);
+      setShouldStopEvaluation(false); // Reset stop flag
+      setAbortController(null);
       toast({
         title: "Evaluation failed",
         description: "There was an error during evaluation. Please check the console for details.",
         status: "error",
         duration: 5000,
       });
-    } finally {
-      setIsEvaluating(false);
-      setIsProcessing(false);
     }
+  };
+
+  // Helper function to parse CSV line
+  const parseCSVLine = (line: string): string[] => {
+    const parts: string[] = [];
+    let current = '';
+    let inQuotes = false;
+    
+    for (let i = 0; i < line.length; i++) {
+      const char = line[i];
+      if (char === '"') {
+        inQuotes = !inQuotes;
+      } else if (char === ',' && !inQuotes) {
+        parts.push(current.trim());
+        current = '';
+      } else {
+        current += char;
+      }
+    }
+    parts.push(current.trim());
+    return parts;
+  };
+
+  // Helper function to determine the correct API endpoint based on model type
+  const getApiEndpoint = (baseUrl: string, modelId: string, provider: string): string => {
+    // For OpenAI, all models including reasoning models use the same endpoint
+    // The o1 series models use /chat/completions but with parameter restrictions
+    
+    // Use standard chat completions endpoint for all models
+    return `${baseUrl}/chat/completions`;
+  };
+
+  // Helper function to run a single question trial
+  const runSingleQuestionTrial = async (
+    model: Model,
+    question: string,
+    correctAnswer: string,
+    prompt: string,
+    questionId?: string,
+    abortSignal?: AbortSignal
+  ): Promise<TrialResult> => {
+    const startTime = Date.now();
+    
+    try {
+      // Get API config from stored configs
+      const storedConfig = storedApiConfigs.find(config => config.provider === model.provider);
+      if (!storedConfig || !storedConfig.key) {
+        const errorMsg = `No API configuration for ${model.provider}. Please add API key first.`;
+        throw new Error(errorMsg);
+      }
+
+      const modelId = model.apiModelId || model.id;
+      
+      // Check if it's an OpenAI reasoning model (o1 series)
+      const isO1Model = /^(o1|o3)(-mini|-preview)?(-\d{4}-\d{2}-\d{2})?$/i.test(modelId);
+      
+      // Build request body - o1 models have different requirements
+      const requestBody: any = {
+        model: modelId // Use the original API model ID
+      };
+      
+      if (isO1Model) {
+        // o1 models don't support system messages - combine system prompt with user message
+        requestBody.messages = [
+          { role: "user", content: `${prompt}\n\n${question}` }
+        ];
+        // o1 models don't support temperature, max_tokens, stop, etc.
+      } else {
+        // Standard models support system messages and parameters
+        requestBody.messages = [
+          { role: "system", content: prompt },
+          { role: "user", content: question }
+        ];
+        requestBody.temperature = temperature;
+      }
+      
+      // max_tokens: 1200,
+      //stop: ["\n\n"],
+
+      // Get the correct endpoint based on model type
+      const endpoint = getApiEndpoint(storedConfig.baseUrl || "https://api.openai.com/v1", modelId, model.provider);
+
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: { 
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${storedConfig.key}`
+        },
+        body: JSON.stringify(requestBody),
+        signal: abortSignal || AbortSignal.timeout(60000),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        const errorMsg = `API request failed: ${response.statusText} - ${JSON.stringify(errorData)}`;
+        
+        // Log to API logs
+        setApiLogs(prev => [...prev, {
+          timestamp: Date.now(),
+          provider: model.provider,
+          model: model.name,
+          request: requestBody,
+          error: errorMsg,
+          duration: Date.now() - startTime,
+          question: question,
+          questionId: questionId,
+          correctAnswer: correctAnswer,
+          temperature: temperature,
+          promptTokens: 0,
+          completionTokens: 0,
+          totalTokens: 0,
+          showFullRequest: false,
+        }]);
+        
+        throw new Error(errorMsg);
+      }
+
+      const data = await response.json();
+      
+      // Handle different response formats (content vs reasoning_content)
+      let rawAnswer = data.choices[0].message.content || "";
+      
+      // For single questions, strip out any numbering (e.g., "1. A" -> "A")
+      let cleanedAnswer = rawAnswer.trim();
+      // Remove patterns like "1.", "1)", "1-", etc. at the start
+      cleanedAnswer = cleanedAnswer.replace(/^\s*\d+[.)\-:]\s*/g, '');
+      const answer = cleanedAnswer.trim().toUpperCase();
+      const duration = Date.now() - startTime;
+      
+      const tokens = data.usage?.total_tokens || estimateTokenCount(prompt + question + answer);
+      const promptTokens = data.usage?.prompt_tokens || 0;
+      const completionTokens = data.usage?.completion_tokens || 0;
+
+
+      // Log to API logs
+      setApiLogs(prev => [...prev, {
+        timestamp: Date.now(),
+        provider: model.provider,
+        model: model.name,
+        request: requestBody,
+        response: {
+          answer: answer,
+          correct: answer === correctAnswer.toUpperCase(),
+          rawResponse: data,
+        },
+        duration: duration,
+        question: question,
+        questionId: questionId,
+        correctAnswer: correctAnswer,
+        temperature: temperature,
+        promptTokens: promptTokens,
+        completionTokens: completionTokens,
+        totalTokens: tokens,
+        showFullRequest: false,
+      }]);
+
+      return {
+        answer,
+        correct: answer === correctAnswer.toUpperCase(),
+        tokens,
+        time: duration
+      };
+    } catch (error) {
+      const duration = Date.now() - startTime;
+      
+      // Handle abort signal specifically
+      if (error instanceof Error && error.name === 'AbortError') {
+        return {
+          answer: "",  // Empty instead of "ABORTED"
+          correct: false,
+          tokens: 0,
+          time: 0,
+          aborted: true  // Flag to indicate this was aborted
+        };
+      }
+      
+      return {
+        answer: "ERROR",
+        correct: false,
+        tokens: 0,
+        time: duration
+      };
+    }
+  };
+
+  // Helper function to run batched trial
+  const runBatchedTrial = async (
+    model: Model,
+    questions: Array<{id: string, question: string, answer: string}>,
+    prompt: string,
+    trialNumber: number,
+    abortSignal?: AbortSignal
+  ): Promise<TrialResult[]> => {
+    const results: TrialResult[] = [];
+    const batchSize = 10;
+    
+    for (let i = 0; i < questions.length; i += batchSize) {
+      // Check if user stopped evaluation before each batch
+      if (shouldStopEvaluation) {
+        break;
+      }
+      
+      const batch = questions.slice(i, Math.min(i + batchSize, questions.length));
+      const startTime = Date.now();
+      
+      try {
+        // Get API config from stored configs
+        const storedConfig = storedApiConfigs.find(config => config.provider === model.provider);
+        if (!storedConfig || !storedConfig.key) {
+          const errorMsg = `No API configuration for ${model.provider}. Please add API key first.`;
+          throw new Error(errorMsg);
+        }
+
+        // Create a combined prompt with all questions
+        const combinedQuestion = batch.map((q, idx) => 
+          `Question ${idx + 1}: ${q.question}`
+        ).join('\n\n');
+
+        const modelId = model.apiModelId || model.id;
+        
+        // Check if it's an OpenAI reasoning model (o1 series)
+        const isO1Model = /^(o1|o3)(-mini|-preview)?(-\d{4}-\d{2}-\d{2})?$/i.test(modelId);
+        
+        // Build request body - o1 models have different requirements
+        const requestBody: any = {
+          model: modelId // Use the original API model ID
+        };
+        
+        if (isO1Model) {
+          // o1 models don't support system messages - combine system prompt with user message
+          requestBody.messages = [
+            { role: "user", content: `${prompt}\n\n${combinedQuestion}` }
+          ];
+          // o1 models don't support temperature, max_tokens, stop, etc.
+        } else {
+          // Standard models support system messages and parameters
+          requestBody.messages = [
+            { role: "system", content: prompt },
+            { role: "user", content: combinedQuestion }
+          ];
+          requestBody.temperature = temperature;
+        }
+        
+        //max_tokens: 500, // Increased to allow for more verbose responses
+        //stop: ["\n\n"],
+
+        // Get the correct endpoint based on model type
+        const endpoint = getApiEndpoint(storedConfig.baseUrl || "https://api.openai.com/v1", modelId, model.provider);
+
+        const response = await fetch(endpoint, {
+          method: "POST",
+          headers: { 
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${storedConfig.key}`
+          },
+          body: JSON.stringify(requestBody),
+          signal: abortSignal || AbortSignal.timeout(60000),
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}));
+          const errorMsg = `API request failed: ${response.statusText} - ${JSON.stringify(errorData)}`;
+          
+          // Log to API logs
+          setApiLogs(prev => [...prev, {
+            timestamp: Date.now(),
+            provider: model.provider,
+            model: model.name,
+            request: requestBody,
+            error: errorMsg,
+            duration: Date.now() - startTime,
+            question: `Batch of ${batch.length} questions`,
+            questionId: batch.map(q => q.id).join(', '),
+            temperature: temperature,
+            promptTokens: 0,
+            completionTokens: 0,
+            totalTokens: 0,
+            showFullRequest: false,
+          }]);
+          
+          throw new Error(errorMsg);
+        }
+
+        const data = await response.json();
+        
+        // Handle different response formats (content vs reasoning_content)
+        const responseText = (data.choices[0].message.content || "").trim();
+        const duration = Date.now() - startTime;
+        const totalTokens = data.usage?.total_tokens || estimateTokenCount(prompt + combinedQuestion + responseText);
+        const promptTokens = data.usage?.prompt_tokens || 0;
+        const completionTokens = data.usage?.completion_tokens || 0;
+        
+        
+        // Parse the response to extract individual answers
+        const answers = parseAndResponseText(responseText, batch.length);
+        
+        
+        // Log to API logs
+        setApiLogs(prev => [...prev, {
+          timestamp: Date.now(),
+          provider: model.provider,
+          model: model.name,
+          request: requestBody,
+          response: {
+            answers: answers,
+            rawResponse: data,
+          },
+          duration: duration,
+          question: `Batch of ${batch.length} questions`,
+          questionId: batch.map(q => q.id).join(', '),
+          temperature: temperature,
+          promptTokens: promptTokens,
+          completionTokens: completionTokens,
+          totalTokens: totalTokens,
+          showFullRequest: false,
+        }]);
+        
+        // Create results for each question in the batch
+        batch.forEach((q, idx) => {
+          results.push({
+            answer: answers[idx] || "ERROR",
+            correct: (answers[idx] || "").toUpperCase() === q.answer.toUpperCase(),
+            tokens: Math.floor(totalTokens / batch.length), // Distribute tokens evenly
+            time: Math.floor(duration / batch.length) // Distribute time evenly
+          });
+        });
+        
+      } catch (error) {
+        const duration = Date.now() - startTime;
+        
+        // Handle abort signal specifically
+        if (error instanceof Error && error.name === 'AbortError') {
+          batch.forEach(() => {
+            results.push({
+              answer: "",  // Empty instead of "ABORTED"
+              correct: false,
+              tokens: 0,
+              time: 0,
+              aborted: true  // Flag to indicate this was aborted
+            });
+          });
+        } else {
+          // Add error results for all questions in this batch
+          batch.forEach(() => {
+            results.push({
+              answer: "ERROR",
+              correct: false,
+              tokens: 0,
+              time: Math.floor(duration / batch.length)
+            });
+          });
+        }
+      }
+    }
+    
+    return results;
+  };
+
+  // Helper function to parse batched responses
+  const parseAndResponseText = (text: string, expectedCount: number): string[] => {
+    const answers: string[] = [];
+    
+    
+    // Try to match numbered patterns (most common format)
+    // This matches the number and captures whatever letter follows (even if invalid)
+    const numberedPattern = /(?:^|\n)\s*(\d+)\.\s*(?:\()?([A-Za-z])(?:\))?/gim;
+    const numberedMatches = Array.from(text.matchAll(numberedPattern));
+    
+    if (numberedMatches.length >= expectedCount) {
+      
+      // Take the first N matches and validate each answer
+      numberedMatches.slice(0, expectedCount).forEach((match, idx) => {
+        const letter = match[2].toUpperCase();
+        
+        // Always add the letter, even if invalid
+        answers.push(letter);
+        
+        // Check if it's a valid answer (A-D) and log accordingly
+        if (/^[A-D]$/.test(letter)) {
+        } else {
+        }
+      });
+      
+      if (answers.length === expectedCount) {
+        return answers;
+      }
+    }
+    
+    // If numbered pattern didn't work, try to extract just letters from lines starting with numbers
+    const lines = text.split('\n');
+    for (const line of lines) {
+      if (answers.length >= expectedCount) break;
+      
+      // Match lines that start with a number followed by anything with a letter
+      const lineMatch = line.match(/^\s*\d+[.):]\s*(?:\()?([A-D])\)?/i);
+      if (lineMatch) {
+        answers.push(lineMatch[1].toUpperCase());
+      }
+    }
+    
+    if (answers.length >= expectedCount) {
+      return answers.slice(0, expectedCount);
+    }
+    
+    // Try other patterns
+    const patterns = [
+      { regex: /(?:^|\n)\s*\d+\)\s*([A-D])\b/gim, name: "Number paren Letter (1) A)" },
+      { regex: /Question\s+\d+:\s*([A-D])\b/gim, name: "Question N: Letter" },
+      { regex: /Answer\s+\d+:\s*([A-D])\b/gim, name: "Answer N: Letter" },
+      { regex: /\d+\.\s*Answer:\s*([A-D])\b/gim, name: "N. Answer: Letter" },
+      { regex: /\d+\)\s*Answer:\s*([A-D])\b/gim, name: "N) Answer: Letter" },
+    ];
+    
+    for (const {regex, name} of patterns) {
+      const matches = text.match(regex);
+      
+      if (matches && matches.length >= expectedCount) {
+        
+        matches.slice(0, expectedCount).forEach(match => {
+          const letter = match.match(/([A-D])/i)?.[1];
+          if (letter) {
+            answers.push(letter.toUpperCase());
+          }
+        });
+        
+        if (answers.length === expectedCount) {
+          return answers;
+        }
+        // Reset if not enough
+        answers.length = 0;
+      }
+    }
+    
+    // Last resort: try to find any A-D letters in the text
+    const letters = text.match(/\b([A-D])\b/gi);
+    
+    if (letters && letters.length >= expectedCount) {
+      const result = letters.slice(0, expectedCount).map(l => l.toUpperCase());
+      return result;
+    }
+    
+    // Ultra fallback: Look for letters without word boundaries (more permissive)
+    const looseLetters = text.match(/([A-D])/gi);
+    
+    if (looseLetters && looseLetters.length >= expectedCount) {
+      const result = looseLetters.slice(0, expectedCount).map(l => l.toUpperCase());
+      return result;
+    }
+    
+    // If we can't parse, return ERROR for all
+    return Array(expectedCount).fill("ERROR");
   };
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -920,7 +1519,6 @@ export default function Home() {
       
       // Verify the file has the required headers in any position
       if (lines.length > 0) {
-        console.log("Uploaded CSV file header:", lines[0]);
         
         // Parse headers the same way as in startEvaluation
         const headerLine = lines[0];
@@ -942,7 +1540,6 @@ export default function Home() {
         }
         headerParts.push(currentHeader.trim().toLowerCase());
         
-        console.log("Parsed headers during upload:", headerParts);
         
         let hasId = headerParts.some(h => h.includes('id'));
         let hasQuestion = headerParts.some(h => h.includes('question'));
@@ -963,7 +1560,6 @@ export default function Home() {
             headerParts[4]?.toLowerCase().includes('correct');
           
           if (isFromIdQuestionLenAnswer) {
-            console.log("Detected standard CSV format in file upload");
             hasId = true;
             hasQuestion = true;
             hasCorrectAnswer = true;
@@ -973,13 +1569,13 @@ export default function Home() {
         const missingColumns = [];
         if (!hasId) missingColumns.push("ID");
         if (!hasQuestion) missingColumns.push("Question");
-        if (!hasCorrectAnswer) missingColumns.push("Correct Answer");
+        if (!hasCorrectAnswer) missingColumns.push("Correct");
         
         if (missingColumns.length > 0) {
           const missingColumnsStr = missingColumns.join(", ");
           toast({
             title: "Missing required columns",
-            description: `CSV is missing: ${missingColumnsStr}. Required columns: ID, Question, and Correct Answer.`,
+            description: `CSV is missing: ${missingColumnsStr}. Required columns: ID, Question, and Correct.`,
             status: "warning",
             duration: 5000,
           });
@@ -1014,7 +1610,6 @@ export default function Home() {
         const config = storedApiConfigs.find(config => config.id === configId);
         if (!config) {
           // The config might have been removed, so let's use the current provider settings instead
-          console.warn(`API Configuration with ID ${configId} not found. Using current provider settings.`);
           
           // If we have configs for the current provider, use those
           const currentProviderConfigs = storedApiConfigs.filter(c => c.provider === currentProvider);
@@ -1080,7 +1675,6 @@ export default function Home() {
             // Handle specific error codes with more detailed information
             if (response.status === 401) {
               const errorMessage = `Authentication failed (401) for ${provider}: Invalid or expired API key`;
-              console.error(errorMessage);
               toast({
                 title: `${provider} Authentication Error`,
                 description: `Invalid or expired API key. Please update your ${provider} API key.`,
@@ -1092,9 +1686,7 @@ export default function Home() {
               // Attempt to get more detailed error information
               try {
                 const errorData = await response.text();
-                console.error(`Failed to fetch models for ${provider} (${response.status}):`, errorData);
               } catch {
-                console.error(`Failed to fetch models for ${provider}: ${response.status}`);
               }
             }
             continue; // Skip this provider but continue with others
@@ -1110,6 +1702,7 @@ export default function Home() {
               id: modelAlreadyHasProvider ? `provider-${provider}-${model.id}` : `${provider}-${model.id}`,
               name: model.id,
               provider: provider,
+              apiModelId: model.id, // Store the original API model ID
             };
           });
           
@@ -1119,7 +1712,6 @@ export default function Home() {
             clearTimeout(timeoutId);
           }
         } catch (error) {
-          console.error(`Error fetching models for ${provider}:`, error);
           
           // Specifically handle timeout errors
           if (error instanceof Error && error.name === 'AbortError') {
@@ -1181,7 +1773,6 @@ export default function Home() {
       
       if (newModels.length === 0) {
         // Just warn instead of throwing an error
-        console.warn("No models could be loaded from any API configurations");
       }
       
       toast({
@@ -1192,7 +1783,6 @@ export default function Home() {
         isClosable: true,
       });
     } catch (error) {
-      console.error(`Error loading models:`, error);
       toast({
         title: `Error loading models`,
         description: error instanceof Error ? error.message : "Please check your API configurations",
@@ -1211,6 +1801,8 @@ export default function Home() {
     { id: "config", title: "3. Configuration", icon: "⚙️" },
     { id: "evaluation", title: "4. Evaluation", icon: "📊" }
   ];
+
+  // Debug logging on every render
 
   return (
     <Flex h="100vh">
@@ -1265,6 +1857,7 @@ export default function Home() {
         h="100vh"
         left={0}
         top={0}
+        zIndex={1000}
       >
         <VStack spacing={6} align="stretch">
           <Box mb={5}>
@@ -1403,17 +1996,6 @@ export default function Home() {
                         <Text mx={1}>•</Text>
                         <Text fontWeight="medium" color="purple.600">OpenWebUI</Text>
                       </HStack>
-                      <VStack spacing={0} mt={1} px={1}>
-                        <Text fontSize="10px" color="orange.600" fontWeight="medium">
-                          Common Model Names:
-                        </Text>
-                        <Text fontSize="9px" color="gray.600">
-                          OpenAI: gpt-3.5-turbo, gpt-4
-                        </Text>
-                        <Text fontSize="9px" color="gray.600">
-                          DeepSeek: deepseek-chat, deepseek-coder
-                        </Text>
-                      </VStack>
                     </VStack>
                   </Box>
                 ) : (
@@ -1542,20 +2124,23 @@ export default function Home() {
           <Box>
             <VStack spacing={4} align="stretch">
               <FormControl>
-                <FormLabel fontSize="sm">Select Models from Available API Configurations</FormLabel>
-                <Box width="100%">
-                  <Menu matchWidth>
-                    <MenuButton
-                      as={Button}
-                      rightIcon={<ChevronDownIcon />}
-                      width="full"
-                      bg="gray.50"
-                      size="sm"
-                      textAlign="left"
-                      fontWeight="normal"
-                    >
-                      Select model
-                    </MenuButton>
+                <HStack spacing={4} align="center">
+                  <FormLabel fontWeight="medium" fontSize="sm" mb={0} minW="fit-content">
+                    Select Models from Available API Configurations
+                  </FormLabel>
+                  <Box width="100%">
+                    <Menu matchWidth>
+                      <MenuButton
+                        as={Button}
+                        rightIcon={<ChevronDownIcon />}
+                        width="full"
+                        bg="gray.50"
+                        size="sm"
+                        textAlign="left"
+                        fontWeight="normal"
+                      >
+                        Select model
+                      </MenuButton>
                     <MenuList bg="gray.50" p={0} mt={-2}>
                       {availableModels.filter(model => !selectedModels.some(m => m.id === model.id)).length > 8 && (
                         <Box 
@@ -1617,11 +2202,12 @@ export default function Home() {
                       </Box>
                     </MenuList>
                   </Menu>
-                </Box>
+                  </Box>
+                </HStack>
               </FormControl>
 
               {selectedModels.length > 0 && (
-                <Box mt={3}>
+                <Box>
                   <Text fontWeight="medium" fontSize="sm" mb={1.5}>Selected Models:</Text>
                   <Flex wrap="wrap" gap={2}>
                     {selectedModels.map((model, index) => {
@@ -1720,7 +2306,7 @@ export default function Home() {
                   Question Database File
                 </Text>
                 <Text fontSize="sm" color="gray.500">
-                  Upload a CSV file with columns: ID, Question, and Correct Answer (in any order)
+                  Upload a CSV file with columns: ID, Question, and Correct (in any order)
                 </Text>
               </Box>
 
@@ -1804,19 +2390,7 @@ export default function Home() {
 
           <VStack spacing={4} align="stretch">
             <HStack spacing={8} align="flex-start">
-              <FormControl flex="3">
-                <FormLabel fontSize="sm">System Prompt</FormLabel>
-                <Textarea
-                  value={systemPrompt}
-                  onChange={(e) => setSystemPrompt(e.target.value)}
-                  placeholder="Enter system prompt for the AI model"
-                  rows={5}
-                  bg="gray.50"
-                  size="sm"
-                />
-              </FormControl>
-
-              <VStack spacing={6} align="stretch" flex="2">
+              <VStack spacing={4} align="stretch" flex="2">
                 <FormControl>
                   <FormLabel fontSize="sm">Temperature: {temperature}</FormLabel>
                   <Slider
@@ -1838,42 +2412,54 @@ export default function Home() {
                   </Text>
                 </FormControl>
 
-                <FormControl>
-                  <HStack justify="space-between" align="center" spacing={4}>
-                    <Box flex="1">
-                      <FormLabel fontSize="sm" mb={0} cursor="pointer">
-                        Auto Clear History
-                      </FormLabel>
-                      <Text fontSize="xs" color="gray.500">
-                        Clear temporary history between questions
-                      </Text>
-                    </Box>
-                    <Switch
-                      isChecked={autoClearHistory}
-                      onChange={() => setAutoClearHistory(!autoClearHistory)}
+                <Box mt={2}>
+                  <HStack spacing={3}>
+                    <Button
                       colorScheme="purple"
+                      maxW="250px"
+                      isDisabled={isEvaluating || selectedModels.length === 0 || !selectedFile}
                       size="md"
-                    />
+                      leftIcon={<TriangleUpIcon transform="rotate(90deg)" boxSize={3} />}
+                      onClick={startEvaluation}
+                      isLoading={isEvaluating && !shouldStopEvaluation}
+                      loadingText="Running..."
+                    >
+                      Start Evaluation
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      colorScheme="red"
+                      size="md"
+                      onClick={() => {
+                        stopEvaluation();
+                      }}
+                      isDisabled={!isEvaluating}
+                      opacity={!isEvaluating ? 0.3 : shouldStopEvaluation ? 0.6 : 1}
+                      minW="100px"
+                      _hover={{ bg: isEvaluating ? "red.50" : undefined }}
+                    >
+                      {shouldStopEvaluation ? "Stopping..." : "Stop"}
+                    </Button>
                   </HStack>
-                </FormControl>
+                </Box>
               </VStack>
+
+              <FormControl flex="3">
+                <FormLabel fontSize="sm">System Prompt</FormLabel>
+                <Textarea
+                  value={systemPrompt}
+                  onChange={(e) => setSystemPrompt(e.target.value)}
+                  placeholder="Enter system prompt for the AI model"
+                  rows={5}
+                  bg="gray.50"
+                  size="sm"
+                />
+              </FormControl>
             </HStack>
 
-            <VStack spacing={4} align="flex-start">
-              <Button
-                colorScheme="purple"
-                width="200px"
-                isDisabled={selectedModels.length === 0 || !selectedFile || isEvaluating}
-                size="md"
-                leftIcon={<TriangleUpIcon transform="rotate(90deg)" boxSize={3} />}
-                onClick={startEvaluation}
-                isLoading={isEvaluating}
-                loadingText={`Processing ${progress.current}/${progress.total}`}
-              >
-                Start Evaluation
-              </Button>
+            <Box mt={4}>
               {isEvaluating && (
-                <Box w="200px">
+                <Box w="100%" maxW="300px" mt={3}>
                   <Text fontSize="sm" color="purple.600" mb={1}>
                     Progress: {Math.round((progress.current / progress.total) * 100)}%
                   </Text>
@@ -1887,7 +2473,7 @@ export default function Home() {
                   </Box>
                 </Box>
               )}
-            </VStack>
+            </Box>
           </VStack>
         </Box>
 
@@ -1908,7 +2494,7 @@ export default function Home() {
             <Heading size="sm">Evaluation Results</Heading>
           </HStack>
 
-          {results.length === 0 ? (
+          {results.length === 0 && trialResults.length === 0 ? (
             <Box 
               bg="purple.50" 
               p={8} 
@@ -1943,54 +2529,210 @@ export default function Home() {
             </Box>
           ) : (
             <Box>
-              {/* Tab Navigation */}
-              <HStack spacing={2} mb={6} overflowX="auto" pb={2}>
-                {[
-                  { id: 'results', label: 'Results' },
-                  { id: 'summary', label: 'Summary' },
-                  { id: 'charts', label: 'Charts' },
-                  { id: 'logs', label: 'API Logs' }
-                ].map(tab => (
-                  <Button
-                    key={tab.id}
-                    size="sm"
-                    variant={activeResultTab === tab.id ? "solid" : "outline"}
-                    colorScheme="purple"
-                    borderRadius="full"
-                    px={6}
-                    onClick={() => setActiveResultTab(tab.id as "results" | "summary" | "charts" | "logs")}
-                  >
-                    {tab.label}
-                  </Button>
-                ))}
+              {/* Tab Navigation with Export Button */}
+              <HStack spacing={2} mb={6} overflowX="auto" pb={2} justifyContent="space-between">
+                <HStack spacing={2}>
+                  {[
+                    { id: 'results', label: 'Results' },
+                    { id: 'summary', label: 'Summary' },
+                    { id: 'charts', label: 'Charts' },
+                    { id: 'logs', label: 'API Logs' }
+                  ].map(tab => (
+                    <Button
+                      key={tab.id}
+                      size="sm"
+                      variant={activeResultTab === tab.id ? "solid" : "outline"}
+                      colorScheme="purple"
+                      borderRadius="full"
+                      px={6}
+                      onClick={() => setActiveResultTab(tab.id as "results" | "summary" | "charts" | "logs")}
+                    >
+                      {tab.label}
+                    </Button>
+                  ))}
+                </HStack>
               </HStack>
               
               {/* Results Tab Content */}
               {activeResultTab === "results" && (
-                <Box>
-                  <Table variant="simple">
-                    <Thead>
-                      <Tr>
-                        <Th>Question</Th>
-                        {selectedModels.map((model) => (
-                          <Th key={model.id}>{model.name}</Th>
-                        ))}
-                      </Tr>
-                    </Thead>
-                    <Tbody>
-                      {results.map((result) => (
-                        <Tr key={result.questionId}>
-                          <Td>{result.questionId}</Td>
+                <>
+                  <HStack justify="flex-end" mb={3}>
+                    <Button
+                      size="xs"
+                      colorScheme="purple"
+                      variant="outline"
+                      onClick={exportToExcel}
+                      isDisabled={trialResults.length === 0}
+                    >
+                      Export to CSV
+                    </Button>
+                  </HStack>
+                <Box overflowX="auto" maxW="100%" sx={{ 
+                  '&::-webkit-scrollbar': {
+                    height: '8px',
+                  },
+                  '&::-webkit-scrollbar-track': {
+                    background: '#f1f1f1',
+                  },
+                  '&::-webkit-scrollbar-thumb': {
+                    background: '#888',
+                    borderRadius: '4px',
+                  },
+                  '&::-webkit-scrollbar-thumb:hover': {
+                    background: '#555',
+                  },
+                }}>
+                  {trialResults.length > 0 ? (
+                    <Table variant="simple" size="sm" width="max-content" minW="100%">
+                      <Thead>
+                        <Tr>
+                          <Th rowSpan={2} borderRight="1px" borderColor="gray.200" fontSize="10px" minW="30px" maxW="40px">#</Th>
+                          <Th rowSpan={2} borderRight="1px" borderColor="gray.200" fontSize="10px" minW="150px" maxW="250px">Question</Th>
+                          <Th rowSpan={2} borderRight="1px" borderColor="gray.200" fontSize="10px" minW="40px" maxW="50px">Len<br/>(Char)</Th>
+                          <Th rowSpan={2} borderRight="2px" borderColor="gray.300" fontSize="10px" minW="40px" maxW="50px">Correct</Th>
                           {selectedModels.map((model) => (
-                            <Td key={model.id}>
-                              {result.modelResults[model.id] ? "✅" : "❌"}
-                            </Td>
+                            <Th key={model.id} colSpan={6} textAlign="center" borderRight="2px" borderColor="gray.400" bg="purple.50" fontSize="xs">
+                              {model.name}
+                            </Th>
                           ))}
                         </Tr>
-                      ))}
-                    </Tbody>
-                  </Table>
+                        <Tr>
+                          {selectedModels.map((model) => (
+                            <Fragment key={`${model.id}-headers`}>
+                              <Th fontSize="10px" borderRight="1px" borderColor="gray.100" minW="35px" maxW="45px">Tokens</Th>
+                              <Th fontSize="10px" borderRight="1px" borderColor="gray.100" minW="35px" maxW="45px">TTFT<br/>(ms)</Th>
+                              <Th fontSize="10px" borderRight="1px" borderColor="gray.100" bg="green.50" minW="25px" maxW="35px">T1</Th>
+                              <Th fontSize="10px" borderRight="1px" borderColor="gray.100" bg="blue.50" minW="25px" maxW="35px">T2</Th>
+                              <Th fontSize="10px" borderRight="1px" borderColor="gray.100" bg="blue.50" minW="25px" maxW="35px">T3</Th>
+                              <Th fontSize="10px" borderRight="2px" borderColor="gray.400" bg="orange.50" minW="35px" maxW="45px">%<br/>of 10</Th>
+                            </Fragment>
+                          ))}
+                        </Tr>
+                      </Thead>
+                      <Tbody>
+                        {trialResults.map((result, index) => (
+                          <Tr key={result.questionId} _hover={{ bg: "gray.50" }}>
+                            <Td borderRight="1px" borderColor="gray.200" fontWeight="medium" fontSize="xs">{index + 1}</Td>
+                            <Td borderRight="1px" borderColor="gray.200" maxW="200px" overflow="hidden" textOverflow="ellipsis" whiteSpace="nowrap" fontSize="xs">
+                              {result.question}
+                            </Td>
+                            <Td borderRight="1px" borderColor="gray.200" fontSize="xs">{result.length}</Td>
+                            <Td borderRight="2px" borderColor="gray.300" fontSize="xs" fontWeight="bold">{result.correctAnswer}</Td>
+                            {selectedModels.map((model) => {
+                              const modelResult = result.modelResults[model.id];
+                              if (!modelResult) {
+                                return (
+                                  <Fragment key={`${model.id}-cells-empty`}>
+                                    <Td borderRight="1px" borderColor="gray.100" fontSize="xs">-</Td>
+                                    <Td borderRight="1px" borderColor="gray.100" fontSize="xs">-</Td>
+                                    <Td borderRight="1px" borderColor="gray.100" fontSize="xs" bg="green.50">-</Td>
+                                    <Td borderRight="1px" borderColor="gray.100" fontSize="xs" bg="blue.50">-</Td>
+                                    <Td borderRight="1px" borderColor="gray.100" fontSize="xs" bg="blue.50">-</Td>
+                                    <Td borderRight="2px" borderColor="gray.400" fontSize="xs" bg="orange.50">-</Td>
+                                  </Fragment>
+                                );
+                              }
+                              
+                              return (
+                                <Fragment key={`${model.id}-cells`}>
+                                  <Td borderRight="1px" borderColor="gray.100" fontSize="xs">
+                                    {modelResult.trial1?.tokens || '-'}
+                                  </Td>
+                                  <Td borderRight="1px" borderColor="gray.100" fontSize="xs">
+                                    {modelResult.trial1?.time || '-'}
+                                  </Td>
+                                  <Td 
+                                    borderRight="1px" 
+                                    borderColor="gray.100" 
+                                    fontSize="xs" 
+                                    fontWeight="bold"
+                                    bg={modelResult.trial1?.aborted || !modelResult.trial1?.answer ? "white" : modelResult.trial1?.correct ? "green.100" : "red.100"}
+                                    maxW="60px"
+                                    overflow="hidden"
+                                    textOverflow="ellipsis"
+                                    whiteSpace="nowrap"
+                                    title={modelResult.trial1?.answer || '-'}
+                                  >
+                                    {modelResult.trial1?.answer || '-'}
+                                  </Td>
+                                  <Td 
+                                    borderRight="1px" 
+                                    borderColor="gray.100" 
+                                    fontSize="xs" 
+                                    fontWeight="bold"
+                                    bg={modelResult.trial2?.aborted || !modelResult.trial2?.answer ? "white" : modelResult.trial2?.correct ? "green.100" : "red.100"}
+                                    maxW="60px"
+                                    overflow="hidden"
+                                    textOverflow="ellipsis"
+                                    whiteSpace="nowrap"
+                                    title={modelResult.trial2?.answer || '-'}
+                                  >
+                                    {modelResult.trial2?.answer || '-'}
+                                  </Td>
+                                  <Td 
+                                    borderRight="1px" 
+                                    borderColor="gray.100" 
+                                    fontSize="xs" 
+                                    fontWeight="bold"
+                                    bg={modelResult.trial3?.aborted || !modelResult.trial3?.answer ? "white" : modelResult.trial3?.correct ? "green.100" : "red.100"}
+                                    maxW="60px"
+                                    overflow="hidden"
+                                    textOverflow="ellipsis"
+                                    whiteSpace="nowrap"
+                                    title={modelResult.trial3?.answer || '-'}
+                                  >
+                                    {modelResult.trial3?.answer || '-'}
+                                  </Td>
+                                  <Td 
+                                    borderRight="2px" 
+                                    borderColor="gray.400" 
+                                    fontSize="xs"
+                                    fontWeight="bold"
+                                    bg={modelResult.isInconsistent ? "orange.100" : "white"}
+                                  >
+                                    {modelResult.correctPercentage !== undefined 
+                                      ? `${Math.round(modelResult.correctPercentage)}%`
+                                      : '-'
+                                    }
+                                  </Td>
+                                </Fragment>
+                              );
+                            })}
+                          </Tr>
+                        ))}
+                      </Tbody>
+                    </Table>
+                  ) : results.length > 0 ? (
+                    // Fallback to old results format if using old evaluation
+                    <Table variant="simple">
+                      <Thead>
+                        <Tr>
+                          <Th>Question</Th>
+                          {selectedModels.map((model) => (
+                            <Th key={model.id}>{model.name}</Th>
+                          ))}
+                        </Tr>
+                      </Thead>
+                      <Tbody>
+                        {results.map((result) => (
+                          <Tr key={result.questionId}>
+                            <Td>{result.questionId}</Td>
+                            {selectedModels.map((model) => (
+                              <Td key={model.id}>
+                                {result.modelResults[model.id] ? "✅" : "❌"}
+                              </Td>
+                            ))}
+                          </Tr>
+                        ))}
+                      </Tbody>
+                    </Table>
+                  ) : (
+                    <Box p={8} textAlign="center">
+                      <Text color="gray.500">No results yet. Start an evaluation to see results.</Text>
+                    </Box>
+                  )}
                 </Box>
+                </>
               )}
               
               {/* Summary Tab Content */}
@@ -1998,9 +2740,27 @@ export default function Home() {
                 <Box>
                   <VStack spacing={4} align="start">
                     {selectedModels.map(model => {
-                      // Calculate accuracy for this model
-                      const correctAnswers = results.filter(r => r.modelResults[model.id]).length;
-                      const totalQuestions = results.length;
+                      // Calculate accuracy for this model using trial results if available
+                      let correctAnswers = 0;
+                      let totalQuestions = 0;
+                      
+                      if (trialResults.length > 0) {
+                        // Use trial results - count Trial 1 correct answers
+                        trialResults.forEach(qResult => {
+                          const modelResult = qResult.modelResults[model.id];
+                          if (modelResult && modelResult.trial1) {
+                            totalQuestions++;
+                            if (modelResult.trial1.correct) {
+                              correctAnswers++;
+                            }
+                          }
+                        });
+                      } else if (results.length > 0) {
+                        // Fallback to old results format
+                        correctAnswers = results.filter(r => r.modelResults[model.id]).length;
+                        totalQuestions = results.length;
+                      }
+                      
                       const accuracy = totalQuestions > 0 ? Math.round((correctAnswers / totalQuestions) * 100) : 0;
                       
                       return (
@@ -2050,15 +2810,26 @@ export default function Home() {
                       Showing {apiLogs.length} API call{apiLogs.length !== 1 ? 's' : ''}
                     </Text>
                     
-                    <Button 
-                      size="xs" 
-                      colorScheme="purple" 
-                      variant="outline"
-                      onClick={() => setApiLogs([])}
-                      isDisabled={apiLogs.length === 0}
-                    >
-                      Clear Logs
-                    </Button>
+                    <HStack spacing={2}>
+                      <Button 
+                        size="xs" 
+                        colorScheme="purple" 
+                        variant="outline"
+                        onClick={exportLogs}
+                        isDisabled={apiLogs.length === 0}
+                      >
+                        Export Logs
+                      </Button>
+                      <Button 
+                        size="xs" 
+                        colorScheme="purple" 
+                        variant="outline"
+                        onClick={() => setApiLogs([])}
+                        isDisabled={apiLogs.length === 0}
+                      >
+                        Clear Logs
+                      </Button>
+                    </HStack>
                   </HStack>
                   
                   <Box maxH="500px" overflowY="auto" borderWidth="1px" borderRadius="md">
@@ -2131,7 +2902,7 @@ export default function Home() {
                                 borderRadius="sm" 
                                 fontSize="xs"
                                 whiteSpace="pre-wrap"
-                                maxH="200px"
+                                maxH="400px"
                                 overflowY="auto"
                                 width="100%"
                                 border="1px"
@@ -2140,9 +2911,17 @@ export default function Home() {
                                 <Text fontWeight="medium" mb={1}>System Prompt:</Text>
                                 <Text mb={2}>{log.request.messages?.[0]?.content || 'N/A'}</Text>
                                 <Text fontWeight="medium" mb={1}>API Request:</Text>
-                                <Text fontFamily="mono" fontSize="10px">
+                                <Text fontFamily="mono" fontSize="10px" mb={2}>
                                   {JSON.stringify(log.request, null, 2)}
                                 </Text>
+                                {log.response && !log.error && (
+                                  <>
+                                    <Text fontWeight="medium" mb={1} color="green.600">API Response:</Text>
+                                    <Text fontFamily="mono" fontSize="10px">
+                                      {JSON.stringify(log.response, null, 2)}
+                                    </Text>
+                                  </>
+                                )}
                               </Box>
                             )}
                           </VStack>
