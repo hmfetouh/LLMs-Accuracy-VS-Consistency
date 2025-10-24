@@ -2486,6 +2486,7 @@ export default function Home() {
           border="1px" 
           borderColor="purple.100"
           scroll-margin-top="2rem"
+          mb={9}
         >
           <HStack spacing={2} mb={4}>
             <Box p={1.5} bg="purple.100" borderRadius="md">
