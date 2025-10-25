@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, Fragment } from "react";
+import { useState, useEffect, Fragment, useRef } from "react";
 
 // Simple function to estimate token count (approximately 4 characters per token)
 const estimateTokenCount = (text: string): number => {
@@ -157,9 +157,20 @@ export default function Home() {
   const [trialResults, setTrialResults] = useState<QuestionResult[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isEvaluating, setIsEvaluating] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
   const [shouldStopEvaluation, setShouldStopEvaluation] = useState(false);
+  const [shouldPauseEvaluation, setShouldPauseEvaluation] = useState(false);
   const [abortController, setAbortController] = useState<AbortController | null>(null);
   const [progress, setProgress] = useState({ current: 0, total: 0 });
+  const [evaluationState, setEvaluationState] = useState<{
+    parsedQuestions: Array<{id: string, question: string, answer: string, class?: string}>;
+    trialResultsArray: QuestionResult[];
+    currentModelIndex: number;
+    currentPhase: 'trial1' | 'trial2' | 'trial3' | 'inconsistent';
+    currentQuestionIndex: number;
+    currentTrialNumber: number;
+    inconsistentQuestions: Array<{index: number, modelId: string}>;
+  } | null>(null);
   const [modelSearch, setModelSearch] = useState("");
   const [activeResultTab, setActiveResultTab] = useState<"results" | "summary" | "charts" | "logs">("results");
   const [apiLogs, setApiLogs] = useState<Array<{
@@ -192,6 +203,10 @@ export default function Home() {
   
   // State to track if class column exists in the loaded CSV
   const [hasClassColumn, setHasClassColumn] = useState<boolean>(false);
+  
+  // Refs to track pause/stop flags (for immediate access in async loops)
+  const shouldPauseRef = useRef(false);
+  const shouldStopRef = useRef(false);
   
   // Load stored configs from localStorage after component mounts
   useEffect(() => {
@@ -449,23 +464,587 @@ export default function Home() {
 
   // Trial-based evaluation function
   const stopEvaluation = () => {
-    setShouldStopEvaluation(true);
-    
-    // Abort any ongoing API requests
-    if (abortController) {
-      abortController.abort();
+    // If already paused, stop immediately without showing "Stopping..."
+    if (isPaused) {
+      // Immediately stop evaluation
+      setIsEvaluating(false);
+      setIsProcessing(false);
+      setIsPaused(false);
+      setShouldPauseEvaluation(false);
+      shouldPauseRef.current = false;
+      shouldStopRef.current = false;
+      setEvaluationState(null);
+      
+      toast({
+        title: "Evaluation Stopped",
+        description: "Paused evaluation has been stopped.",
+        status: "warning",
+        duration: 3000,
+      });
+    } else {
+      // For active evaluations, set stopping flag
+      setShouldStopEvaluation(true);
+      shouldStopRef.current = true;
+      
+      // Abort any ongoing API requests
+      if (abortController) {
+        abortController.abort();
+      }
+      
+      // Immediately stop evaluation
+      setIsEvaluating(false);
+      setIsProcessing(false);
+      setIsPaused(false);
+      setShouldPauseEvaluation(false);
+      shouldPauseRef.current = false;
+      setEvaluationState(null);
+      
+      toast({
+        title: "Evaluation Stopped",
+        description: "Evaluation has been stopped immediately.",
+        status: "warning",
+        duration: 3000,
+      });
     }
+  };
+
+  const pauseEvaluation = () => {
+    setShouldPauseEvaluation(true);
+    shouldPauseRef.current = true;
     
-    // Immediately stop evaluation
-    setIsEvaluating(false);
-    setIsProcessing(false);
+    // No toast here - button shows "Pausing..." and we'll show toast when pause completes
+  };
+
+  const resumeEvaluation = () => {
+    if (!evaluationState) {
+      toast({
+        title: "Cannot Resume",
+        description: "No paused evaluation found.",
+        status: "error",
+        duration: 3000,
+      });
+      return;
+    }
+
+    setIsPaused(false);
+    setShouldPauseEvaluation(false);
+    shouldPauseRef.current = false;
+    setIsEvaluating(true);
+    setIsProcessing(true);
+    
+    // Continue evaluation from saved state
+    runEvaluationLoop(evaluationState);
     
     toast({
-      title: "Evaluation Stopped",
-      description: "Evaluation has been stopped immediately.",
-      status: "warning",
+      title: "Resuming Evaluation",
+      description: "Evaluation is resuming from where it was paused.",
+      status: "success",
       duration: 3000,
     });
+  };
+
+  // Main evaluation loop that can be paused and resumed
+  const runEvaluationLoop = async (state: {
+    parsedQuestions: Array<{id: string, question: string, answer: string, class?: string}>;
+    trialResultsArray: QuestionResult[];
+    currentModelIndex: number;
+    currentPhase: 'trial1' | 'trial2' | 'trial3' | 'inconsistent';
+    currentQuestionIndex: number;
+    currentTrialNumber: number;
+    inconsistentQuestions: Array<{index: number, modelId: string}>;
+  }) => {
+    const controller = abortController || new AbortController();
+    if (!abortController) {
+      setAbortController(controller);
+    }
+
+    let wasStopped = false;
+    let { parsedQuestions, trialResultsArray, currentModelIndex, currentPhase, currentQuestionIndex, currentTrialNumber, inconsistentQuestions } = state;
+
+    try {
+      // Phase 1: Run 3 trials for each model
+      for (let modelIdx = currentModelIndex; modelIdx < selectedModels.length; modelIdx++) {
+        const model = selectedModels[modelIdx];
+
+        // Check if user stopped evaluation
+        if (shouldStopRef.current) {
+          wasStopped = true;
+          break;
+        }
+
+        // Check if user paused evaluation
+        if (shouldPauseRef.current) {
+          setIsPaused(true);
+          setIsEvaluating(false);
+          setIsProcessing(false);
+          setShouldPauseEvaluation(false); // Reset pause flag
+          shouldPauseRef.current = false;
+          setEvaluationState({
+            parsedQuestions,
+            trialResultsArray,
+            currentModelIndex: modelIdx,
+            currentPhase,
+            currentQuestionIndex,
+            currentTrialNumber,
+            inconsistentQuestions
+          });
+          toast({
+            title: "Evaluation Paused",
+            description: "You can resume from where you left off.",
+            status: "info",
+            duration: 3000,
+          });
+          return;
+        }
+
+        // Trial 1: Individual questions (1 per request)
+        if (currentPhase === 'trial1') {
+          for (let i = (modelIdx === currentModelIndex ? currentQuestionIndex : 0); i < parsedQuestions.length; i++) {
+            // Check for stop
+            if (shouldStopRef.current) {
+              wasStopped = true;
+              break;
+            }
+
+            // Check for pause
+            if (shouldPauseRef.current) {
+              setIsPaused(true);
+              setIsEvaluating(false);
+              setIsProcessing(false);
+              setShouldPauseEvaluation(false); // Reset pause flag so button shows "Pause" again
+              shouldPauseRef.current = false;
+              setEvaluationState({
+                parsedQuestions,
+                trialResultsArray,
+                currentModelIndex: modelIdx,
+                currentPhase: 'trial1',
+                currentQuestionIndex: i,
+                currentTrialNumber,
+                inconsistentQuestions
+              });
+              toast({
+                title: "Evaluation Paused",
+                description: "You can resume from where you left off.",
+                status: "info",
+                duration: 3000,
+              });
+              return;
+            }
+
+            const q = parsedQuestions[i];
+            
+            try {
+              const trialResult = await runSingleQuestionTrial(model, q.question, q.answer, systemPrompt, q.id, controller.signal);
+
+              if (!trialResultsArray[i].modelResults[model.id]) {
+                trialResultsArray[i].modelResults[model.id] = { trial1: trialResult };
+              } else {
+                trialResultsArray[i].modelResults[model.id].trial1 = trialResult;
+              }
+
+              setProgress(prev => ({ ...prev, current: prev.current + 1 }));
+              setTrialResults([...trialResultsArray]);
+            } catch (error) {
+              // Handle error by pausing
+              setIsPaused(true);
+              setIsEvaluating(false);
+              setIsProcessing(false);
+              setShouldPauseEvaluation(false);
+              shouldPauseRef.current = false;
+              setEvaluationState({
+                parsedQuestions,
+                trialResultsArray,
+                currentModelIndex: modelIdx,
+                currentPhase: 'trial1',
+                currentQuestionIndex: i, // Retry this question
+                currentTrialNumber,
+                inconsistentQuestions
+              });
+              
+              toast({
+                title: "API Error - Evaluation Paused",
+                description: `Error encountered: ${error instanceof Error ? error.message : 'Unknown error'}. Click Resume to retry.`,
+                status: "error",
+                duration: 10000,
+                isClosable: true,
+              });
+              return;
+            }
+          }
+
+          // Check for stop before moving to next phase
+          if (shouldStopRef.current) {
+            wasStopped = true;
+            break;
+          }
+
+          // Check for pause before moving to next phase
+          if (shouldPauseRef.current) {
+            setIsPaused(true);
+            setIsEvaluating(false);
+            setIsProcessing(false);
+            setShouldPauseEvaluation(false); // Reset pause flag
+            shouldPauseRef.current = false;
+            setEvaluationState({
+              parsedQuestions,
+              trialResultsArray,
+              currentModelIndex: modelIdx,
+              currentPhase: 'trial2',
+              currentQuestionIndex: 0,
+              currentTrialNumber,
+              inconsistentQuestions
+            });
+            toast({
+              title: "Evaluation Paused",
+              description: "You can resume from where you left off.",
+              status: "info",
+              duration: 3000,
+            });
+            return;
+          }
+
+          currentPhase = 'trial2';
+          currentQuestionIndex = 0;
+        }
+
+        // Trial 2: Batch questions (up to 10 per request)
+        if (currentPhase === 'trial2') {
+          try {
+            const trial2Results = await runBatchedTrial(model, parsedQuestions, systemPrompt, 2, controller.signal);
+            trial2Results.forEach((result, index) => {
+              if (trialResultsArray[index].modelResults[model.id]) {
+                trialResultsArray[index].modelResults[model.id].trial2 = result;
+              }
+              setProgress(prev => ({ ...prev, current: prev.current + 1 }));
+            });
+            setTrialResults([...trialResultsArray]);
+          } catch (error) {
+            // Handle error by pausing
+            setIsPaused(true);
+            setIsEvaluating(false);
+            setIsProcessing(false);
+            setShouldPauseEvaluation(false);
+            shouldPauseRef.current = false;
+            setEvaluationState({
+              parsedQuestions,
+              trialResultsArray,
+              currentModelIndex: modelIdx,
+              currentPhase: 'trial2',
+              currentQuestionIndex: 0,
+              currentTrialNumber,
+              inconsistentQuestions
+            });
+            
+            toast({
+              title: "API Error - Evaluation Paused",
+              description: `Error encountered: ${error instanceof Error ? error.message : 'Unknown error'}. Click Resume to retry.`,
+              status: "error",
+              duration: 10000,
+              isClosable: true,
+            });
+            return;
+          }
+
+          // Check for stop
+          if (shouldStopRef.current) {
+            wasStopped = true;
+            break;
+          }
+
+          // Check for pause
+          if (shouldPauseRef.current) {
+            setIsPaused(true);
+            setIsEvaluating(false);
+            setIsProcessing(false);
+            setShouldPauseEvaluation(false); // Reset pause flag
+            shouldPauseRef.current = false;
+            setEvaluationState({
+              parsedQuestions,
+              trialResultsArray,
+              currentModelIndex: modelIdx,
+              currentPhase: 'trial3',
+              currentQuestionIndex: 0,
+              currentTrialNumber,
+              inconsistentQuestions
+            });
+            toast({
+              title: "Evaluation Paused",
+              description: "You can resume from where you left off.",
+              status: "info",
+              duration: 3000,
+            });
+            return;
+          }
+
+          currentPhase = 'trial3';
+          currentQuestionIndex = 0;
+        }
+
+        // Trial 3: Batch questions (up to 10 per request)
+        if (currentPhase === 'trial3') {
+          try {
+            const trial3Results = await runBatchedTrial(model, parsedQuestions, systemPrompt, 3, controller.signal);
+            trial3Results.forEach((result, index) => {
+              if (trialResultsArray[index].modelResults[model.id]) {
+                trialResultsArray[index].modelResults[model.id].trial3 = result;
+              }
+              setProgress(prev => ({ ...prev, current: prev.current + 1 }));
+            });
+            setTrialResults([...trialResultsArray]);
+          } catch (error) {
+            // Handle error by pausing
+            setIsPaused(true);
+            setIsEvaluating(false);
+            setIsProcessing(false);
+            setShouldPauseEvaluation(false);
+            shouldPauseRef.current = false;
+            setEvaluationState({
+              parsedQuestions,
+              trialResultsArray,
+              currentModelIndex: modelIdx,
+              currentPhase: 'trial3',
+              currentQuestionIndex: 0,
+              currentTrialNumber,
+              inconsistentQuestions
+            });
+            
+            toast({
+              title: "API Error - Evaluation Paused",
+              description: `Error encountered: ${error instanceof Error ? error.message : 'Unknown error'}. Click Resume to retry.`,
+              status: "error",
+              duration: 10000,
+              isClosable: true,
+            });
+            return;
+          }
+        }
+
+        // Reset phase for next model
+        if (modelIdx < selectedModels.length - 1) {
+          currentPhase = 'trial1';
+          currentQuestionIndex = 0;
+        }
+      }
+
+      // Check if user stopped evaluation before Phase 2
+      if (shouldStopRef.current) {
+        wasStopped = true;
+        setIsEvaluating(false);
+        setIsProcessing(false);
+        setShouldStopEvaluation(false);
+        shouldStopRef.current = false;
+        setIsPaused(false);
+        setEvaluationState(null);
+        setAbortController(null);
+        toast({
+          title: "Evaluation Stopped",
+          description: "Evaluation was stopped. Partial results are available.",
+          status: "info",
+          duration: 3000,
+        });
+        return;
+      }
+
+      // Phase 2: Check for inconsistencies and run additional trials
+      inconsistentQuestions = [];
+      
+      trialResultsArray.forEach((qResult, index) => {
+        Object.entries(qResult.modelResults).forEach(([modelId, modelResult]) => {
+          const answers = [
+            modelResult.trial1?.answer,
+            modelResult.trial2?.answer,
+            modelResult.trial3?.answer
+          ].filter(Boolean);
+          
+          const uniqueAnswers = new Set(answers);
+          if (uniqueAnswers.size > 1) {
+            modelResult.isInconsistent = true;
+            inconsistentQuestions.push({ index, modelId });
+          }
+        });
+      });
+
+      // Phase 3: Run 7 additional trials for inconsistent questions (BATCHED)
+      if (inconsistentQuestions.length > 0) {
+        // Group inconsistent questions by model for batching
+        const inconsistentByModel = new Map<string, Array<{index: number, question: {id: string, question: string, answer: string}}>>();
+        
+        for (const {index, modelId} of inconsistentQuestions) {
+          if (!inconsistentByModel.has(modelId)) {
+            inconsistentByModel.set(modelId, []);
+          }
+          inconsistentByModel.get(modelId)!.push({
+            index,
+            question: parsedQuestions[index]
+          });
+        }
+        
+        // Update progress to account for 7 batched trials per model (not per question)
+        const totalAdditionalTrials = Array.from(inconsistentByModel.values())
+          .reduce((sum, questions) => sum + (Math.ceil(questions.length / 10) * 7), 0);
+        setProgress(prev => ({ ...prev, total: prev.total + totalAdditionalTrials }));
+        
+        // Run 7 additional trials for each model's inconsistent questions
+        for (const [modelId, modelInconsistentQuestions] of Array.from(inconsistentByModel.entries())) {
+          const model = selectedModels.find(m => m.id === modelId);
+          if (!model) continue;
+          
+          // Run trials 4-10 (7 trials)
+          for (let trialNum = 4; trialNum <= 10; trialNum++) {
+            // Check for stop
+            if (shouldStopRef.current) {
+              wasStopped = true;
+              break;
+            }
+
+            // Check for pause
+            if (shouldPauseRef.current) {
+              setIsPaused(true);
+              setIsEvaluating(false);
+              setIsProcessing(false);
+              setShouldPauseEvaluation(false); // Reset pause flag
+              shouldPauseRef.current = false;
+              setEvaluationState({
+                parsedQuestions,
+                trialResultsArray,
+                currentModelIndex: selectedModels.length, // Past regular trials
+                currentPhase: 'inconsistent',
+                currentQuestionIndex: 0,
+                currentTrialNumber: trialNum,
+                inconsistentQuestions
+              });
+              toast({
+                title: "Evaluation Paused",
+                description: "You can resume from where you left off.",
+                status: "info",
+                duration: 3000,
+              });
+              return;
+            }
+
+            try {
+              const trialResults = await runBatchedTrial(
+                model,
+                modelInconsistentQuestions.map((q: {index: number, question: {id: string, question: string, answer: string}}) => q.question),
+                systemPrompt,
+                trialNum,
+                controller.signal
+              );
+              
+              // Distribute results back to the corresponding questions
+              trialResults.forEach((result, idx) => {
+                const questionIndex = modelInconsistentQuestions[idx].index;
+                
+                if (!trialResultsArray[questionIndex].modelResults[modelId].additionalTrials) {
+                  trialResultsArray[questionIndex].modelResults[modelId].additionalTrials = [];
+                }
+                trialResultsArray[questionIndex].modelResults[modelId].additionalTrials!.push(result);
+              });
+              
+              setProgress(prev => ({ ...prev, current: prev.current + 1 }));
+              setTrialResults([...trialResultsArray]);
+            } catch (error) {
+              // Handle error by pausing
+              setIsPaused(true);
+              setIsEvaluating(false);
+              setIsProcessing(false);
+              setShouldPauseEvaluation(false);
+              shouldPauseRef.current = false;
+              setEvaluationState({
+                parsedQuestions,
+                trialResultsArray,
+                currentModelIndex: selectedModels.length,
+                currentPhase: 'inconsistent',
+                currentQuestionIndex: 0,
+                currentTrialNumber: trialNum,
+                inconsistentQuestions
+              });
+              
+              toast({
+                title: "API Error - Evaluation Paused",
+                description: `Error encountered: ${error instanceof Error ? error.message : 'Unknown error'}. Click Resume to retry.`,
+                status: "error",
+                duration: 10000,
+                isClosable: true,
+              });
+              return;
+            }
+          }
+          
+          if (shouldStopRef.current) {
+            wasStopped = true;
+            break;
+          }
+
+          // Calculate percentage correct out of 10 trials for each inconsistent question
+          for (const {index} of modelInconsistentQuestions) {
+            const modelResult = trialResultsArray[index].modelResults[modelId];
+            const allTrials = [
+              modelResult.trial1,
+              modelResult.trial2,
+              modelResult.trial3,
+              ...(modelResult.additionalTrials || [])
+            ].filter(Boolean) as TrialResult[];
+            
+            // Filter out aborted trials from the calculation
+            const nonAbortedTrials = allTrials.filter(t => !t.aborted);
+            
+            // Only calculate percentage if we have non-aborted trials
+            if (nonAbortedTrials.length > 0) {
+              const correctCount = nonAbortedTrials.filter(t => t.correct).length;
+              modelResult.correctPercentage = (correctCount / nonAbortedTrials.length) * 100;
+            }
+          }
+        }
+        
+        setTrialResults([...trialResultsArray]);
+      }
+
+      setTrialResults(trialResultsArray);
+      
+      // Scroll to results section
+      setTimeout(() => {
+        document.getElementById('evaluation')?.scrollIntoView({ behavior: 'smooth' });
+      }, 0);
+      
+      // Only show completion message if evaluation wasn't stopped
+      if (!wasStopped && !controller.signal.aborted) {
+        toast({
+          title: "Trial evaluation completed",
+          description: `Processed ${parsedQuestions.length} questions with ${selectedModels.length} models. Found ${inconsistentQuestions.length} inconsistent responses.`,
+          status: "success",
+          duration: 5000,
+        });
+      }
+      
+      // Reset evaluation state
+      setIsEvaluating(false);
+      setIsProcessing(false);
+      setShouldStopEvaluation(false);
+      setShouldPauseEvaluation(false);
+      shouldStopRef.current = false;
+      shouldPauseRef.current = false;
+      setIsPaused(false);
+      setEvaluationState(null);
+      setAbortController(null);
+    } catch (error) {
+      setIsEvaluating(false);
+      setIsProcessing(false);
+      setShouldStopEvaluation(false);
+      setShouldPauseEvaluation(false);
+      shouldStopRef.current = false;
+      shouldPauseRef.current = false;
+      setIsPaused(false);
+      setEvaluationState(null);
+      setAbortController(null);
+      
+      toast({
+        title: "Evaluation failed",
+        description: "There was an error during evaluation processing. Please check the console for details.",
+        status: "error",
+        duration: 5000,
+      });
+    }
   };
 
   const exportToExcel = () => {
@@ -687,12 +1266,12 @@ export default function Home() {
           const controller = new AbortController();
           setAbortController(controller);
           
-          // Local flag to track if evaluation was stopped
-          let wasStopped = false;
-          
           // Set both global and local loading states INSIDE the callback
           setIsProcessing(true);
           setIsEvaluating(true);
+          setShouldPauseEvaluation(false);
+          shouldPauseRef.current = false;
+          shouldStopRef.current = false;
           
           // Force a small delay to ensure state updates
           setTimeout(() => {
@@ -863,206 +1442,26 @@ export default function Home() {
           modelResults: {}
         }));
 
-        // Phase 1: Run 3 trials for each model
-        for (const model of selectedModels) {
-          // Check if user stopped evaluation
-          if (shouldStopEvaluation) {
-            wasStopped = true;
-            break;
-          }
-          
-          
-          // Trial 1: Individual questions (1 per request)
-          for (let i = 0; i < parsedQuestions.length; i++) {
-            // Check if user stopped evaluation
-            if (shouldStopEvaluation) {
-              wasStopped = true;
-              break;
-            }
-            
-            const q = parsedQuestions[i];
-            const trialResult = await runSingleQuestionTrial(model, q.question, q.answer, systemPrompt, q.id, controller.signal);
-            
-            if (!trialResultsArray[i].modelResults[model.id]) {
-              trialResultsArray[i].modelResults[model.id] = { trial1: trialResult };
-            } else {
-              trialResultsArray[i].modelResults[model.id].trial1 = trialResult;
-            }
-            
-            setProgress(prev => ({ ...prev, current: prev.current + 1 }));
-            setTrialResults([...trialResultsArray]);
-          }
-
-          // Check if user stopped evaluation
-          if (shouldStopEvaluation) {
-            wasStopped = true;
-            break;
-          }
-
-          // Trial 2: Batch questions (up to 10 per request)
-          const trial2Results = await runBatchedTrial(model, parsedQuestions, systemPrompt, 2, controller.signal);
-          trial2Results.forEach((result, index) => {
-            if (trialResultsArray[index].modelResults[model.id]) {
-              trialResultsArray[index].modelResults[model.id].trial2 = result;
-            }
-            setProgress(prev => ({ ...prev, current: prev.current + 1 }));
-          });
-          setTrialResults([...trialResultsArray]);
-
-          // Check if user stopped evaluation
-          if (shouldStopEvaluation) {
-            wasStopped = true;
-            break;
-          }
-
-          // Trial 3: Batch questions (up to 10 per request)
-          const trial3Results = await runBatchedTrial(model, parsedQuestions, systemPrompt, 3, controller.signal);
-          trial3Results.forEach((result, index) => {
-            if (trialResultsArray[index].modelResults[model.id]) {
-              trialResultsArray[index].modelResults[model.id].trial3 = result;
-            }
-            setProgress(prev => ({ ...prev, current: prev.current + 1 }));
-          });
-          setTrialResults([...trialResultsArray]);
-        }
-
-        // Check if user stopped evaluation before Phase 2
-        if (shouldStopEvaluation) {
-          wasStopped = true;
-          setIsEvaluating(false);
-          setIsProcessing(false);
-          setShouldStopEvaluation(false); // Reset stop flag
-          setAbortController(null);
-          toast({
-            title: "Evaluation Stopped",
-            description: "Evaluation was stopped. Partial results are available.",
-            status: "info",
-            duration: 3000,
-          });
-          return;
-        }
-
-        // Phase 2: Check for inconsistencies and run additional trials
-        const inconsistentQuestions: Array<{index: number, modelId: string}> = [];
-        
-        trialResultsArray.forEach((qResult, index) => {
-          Object.entries(qResult.modelResults).forEach(([modelId, modelResult]) => {
-            const answers = [
-              modelResult.trial1?.answer,
-              modelResult.trial2?.answer,
-              modelResult.trial3?.answer
-            ].filter(Boolean);
-            
-            const uniqueAnswers = new Set(answers);
-            if (uniqueAnswers.size > 1) {
-              modelResult.isInconsistent = true;
-              inconsistentQuestions.push({ index, modelId });
-            }
-          });
+        // Start the evaluation loop with initial state
+        await runEvaluationLoop({
+          parsedQuestions,
+          trialResultsArray,
+          currentModelIndex: 0,
+          currentPhase: 'trial1',
+          currentQuestionIndex: 0,
+          currentTrialNumber: 0,
+          inconsistentQuestions: []
         });
-
-        // Phase 3: Run 7 additional trials for inconsistent questions (BATCHED)
-        if (inconsistentQuestions.length > 0) {
-          
-          // Group inconsistent questions by model for batching
-          const inconsistentByModel = new Map<string, Array<{index: number, question: {id: string, question: string, answer: string}}>>();
-          
-          for (const {index, modelId} of inconsistentQuestions) {
-            if (!inconsistentByModel.has(modelId)) {
-              inconsistentByModel.set(modelId, []);
-            }
-            inconsistentByModel.get(modelId)!.push({
-              index,
-              question: parsedQuestions[index]
-            });
-          }
-          
-          // Update progress to account for 7 batched trials per model (not per question)
-          const totalAdditionalTrials = Array.from(inconsistentByModel.values())
-            .reduce((sum, questions) => sum + (Math.ceil(questions.length / 10) * 7), 0);
-          setProgress(prev => ({ ...prev, total: prev.total + totalAdditionalTrials }));
-          
-          // Run 7 additional trials for each model's inconsistent questions
-          for (const [modelId, modelInconsistentQuestions] of Array.from(inconsistentByModel.entries())) {
-            const model = selectedModels.find(m => m.id === modelId);
-            if (!model) continue;
-            
-            
-            // Run trials 4-10 (7 trials)
-            for (let trialNum = 4; trialNum <= 10; trialNum++) {
-              const trialResults = await runBatchedTrial(
-                model,
-                modelInconsistentQuestions.map((q: {index: number, question: {id: string, question: string, answer: string}}) => q.question),
-                systemPrompt,
-                trialNum,
-                controller.signal
-              );
-              
-              // Distribute results back to the corresponding questions
-              trialResults.forEach((result, idx) => {
-                const questionIndex = modelInconsistentQuestions[idx].index;
-                
-                if (!trialResultsArray[questionIndex].modelResults[modelId].additionalTrials) {
-                  trialResultsArray[questionIndex].modelResults[modelId].additionalTrials = [];
-                }
-                trialResultsArray[questionIndex].modelResults[modelId].additionalTrials!.push(result);
-              });
-              
-              setProgress(prev => ({ ...prev, current: prev.current + 1 }));
-              setTrialResults([...trialResultsArray]);
-            }
-            
-            // Calculate percentage correct out of 10 trials for each inconsistent question
-            for (const {index} of modelInconsistentQuestions) {
-              const modelResult = trialResultsArray[index].modelResults[modelId];
-              const allTrials = [
-                modelResult.trial1,
-                modelResult.trial2,
-                modelResult.trial3,
-                ...(modelResult.additionalTrials || [])
-              ].filter(Boolean) as TrialResult[];
-              
-              // Filter out aborted trials from the calculation
-              const nonAbortedTrials = allTrials.filter(t => !t.aborted);
-              
-              // Only calculate percentage if we have non-aborted trials
-              if (nonAbortedTrials.length > 0) {
-                const correctCount = nonAbortedTrials.filter(t => t.correct).length;
-                modelResult.correctPercentage = (correctCount / nonAbortedTrials.length) * 100;
-              }
-            }
-          }
-          
-          setTrialResults([...trialResultsArray]);
-        }
-
-        setTrialResults(trialResultsArray);
         
-        // Scroll to results section
-        setTimeout(() => {
-          document.getElementById('evaluation')?.scrollIntoView({ behavior: 'smooth' });
-        }, 0);
-        
-        // Only show completion message if evaluation wasn't stopped
-        // Check both the local flag and if the controller was aborted
-        if (!wasStopped && !controller.signal.aborted) {
-          toast({
-            title: "Trial evaluation completed",
-            description: `Processed ${parsedQuestions.length} questions with ${selectedModels.length} models. Found ${inconsistentQuestions.length} inconsistent responses.`,
-            status: "success",
-            duration: 5000,
-          });
-        }
-        
-        // Reset evaluation state - MOVED FROM OUTSIDE
-        setIsEvaluating(false);
-        setIsProcessing(false);
-        setShouldStopEvaluation(false); // Reset stop flag
-        setAbortController(null);
         } catch (callbackError) {
           setIsEvaluating(false);
           setIsProcessing(false);
-          setShouldStopEvaluation(false); // Reset stop flag
+          setShouldStopEvaluation(false);
+          setShouldPauseEvaluation(false);
+          shouldStopRef.current = false;
+          shouldPauseRef.current = false;
+          setIsPaused(false);
+          setEvaluationState(null);
           setAbortController(null);
           toast({
             title: "Evaluation failed",
@@ -1077,7 +1476,12 @@ export default function Home() {
     } catch (error) {
       setIsEvaluating(false);
       setIsProcessing(false);
-      setShouldStopEvaluation(false); // Reset stop flag
+      setShouldStopEvaluation(false);
+      setShouldPauseEvaluation(false);
+      shouldStopRef.current = false;
+      shouldPauseRef.current = false;
+      setIsPaused(false);
+      setEvaluationState(null);
       setAbortController(null);
       toast({
         title: "Evaluation failed",
@@ -1542,6 +1946,24 @@ export default function Home() {
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
+
+    // Reset pause/resume state when new file is loaded
+    if (isPaused || evaluationState) {
+      setIsPaused(false);
+      setShouldPauseEvaluation(false);
+      shouldPauseRef.current = false;
+      setEvaluationState(null);
+      setTrialResults([]); // Clear previous results
+      setResults([]);
+      setApiLogs([]);
+      
+      toast({
+        title: "New File Loaded",
+        description: "Previous evaluation state has been cleared. You can start a fresh evaluation.",
+        status: "info",
+        duration: 3000,
+      });
+    }
 
     setSelectedFile(file);
     const reader = new FileReader();
@@ -2459,14 +2881,27 @@ export default function Home() {
                     <Button
                       colorScheme="blue"
                       maxW="250px"
-                      isDisabled={isEvaluating || selectedModels.length === 0 || !selectedFile}
+                      isDisabled={(isEvaluating && !(isPaused && evaluationState)) || selectedModels.length === 0 || (!selectedFile && !(isPaused && evaluationState))}
                       size="md"
                       leftIcon={<TriangleUpIcon transform="rotate(90deg)" boxSize={3} />}
-                      onClick={startEvaluation}
-                      isLoading={isEvaluating && !shouldStopEvaluation}
+                      onClick={isPaused && evaluationState ? resumeEvaluation : startEvaluation}
+                      isLoading={isEvaluating && !shouldStopEvaluation && !isPaused}
                       loadingText="Running..."
                     >
-                      Start Evaluation
+                      {isPaused && evaluationState ? "Resume" : "Start Evaluation"}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      colorScheme="orange"
+                      size="md"
+                      onClick={() => {
+                        pauseEvaluation();
+                      }}
+                      isDisabled={!isEvaluating || isPaused || shouldPauseEvaluation}
+                      minW="100px"
+                      _hover={{ bg: isEvaluating && !isPaused ? "orange.50" : undefined }}
+                    >
+                      {shouldPauseEvaluation ? "Pausing..." : isPaused ? "Paused" : "Pause"}
                     </Button>
                     <Button
                       variant="ghost"
@@ -2475,10 +2910,10 @@ export default function Home() {
                       onClick={() => {
                         stopEvaluation();
                       }}
-                      isDisabled={!isEvaluating}
-                      opacity={!isEvaluating ? 0.3 : shouldStopEvaluation ? 0.6 : 1}
+                      isDisabled={!isEvaluating && !isPaused}
+                      opacity={(!isEvaluating && !isPaused) ? 0.3 : shouldStopEvaluation ? 0.6 : 1}
                       minW="100px"
-                      _hover={{ bg: isEvaluating ? "red.50" : undefined }}
+                      _hover={{ bg: (isEvaluating || isPaused) ? "red.50" : undefined }}
                     >
                       {shouldStopEvaluation ? "Stopping..." : "Stop"}
                     </Button>
@@ -2657,7 +3092,7 @@ export default function Home() {
                       </Thead>
                       <Tbody>
                         {trialResults.map((result, index) => (
-                          <Tr key={result.questionId} _hover={{ bg: "gray.50" }}>
+                          <Tr key={`result-${index}`} _hover={{ bg: "gray.50" }}>
                             <Td borderRight="1px" borderColor="gray.200" fontWeight="medium" fontSize="xs">{index + 1}</Td>
                             {hasClassColumn && (
                               <Td borderRight="1px" borderColor="gray.200" fontSize="xs" maxW="80px" overflow="hidden" textOverflow="ellipsis" whiteSpace="nowrap">
@@ -2765,8 +3200,8 @@ export default function Home() {
                         </Tr>
                       </Thead>
                       <Tbody>
-                        {results.map((result) => (
-                          <Tr key={result.questionId}>
+                        {results.map((result, index) => (
+                          <Tr key={`summary-${index}`}>
                             <Td>{result.questionId}</Td>
                             {selectedModels.map((model) => (
                               <Td key={model.id}>
