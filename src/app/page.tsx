@@ -1617,7 +1617,7 @@ export default function Home() {
           "Authorization": `Bearer ${storedConfig.key}`
         },
         body: JSON.stringify(requestBody),
-        signal: abortSignal || AbortSignal.timeout(60000),
+        signal: abortSignal || AbortSignal.timeout(600000), // 10 minutes for slow reasoning models
       });
 
       if (!response.ok) {
@@ -1656,6 +1656,34 @@ export default function Home() {
       cleanedAnswer = cleanedAnswer.replace(/^\s*\d+[.)\-:]\s*/g, '');
       const answer = cleanedAnswer.trim().toUpperCase();
       const duration = Date.now() - startTime;
+
+      // Check if the answer is empty after cleaning - log but don't auto-pause
+      if (!answer || answer.length === 0) {
+        // Log empty response to API logs but return "ERROR" instead of throwing
+        setApiLogs(prev => [...prev, {
+          timestamp: Date.now(),
+          provider: model.provider,
+          model: model.name,
+          request: requestBody,
+          error: `Empty response: No valid answer found in model response. Raw response: "${rawAnswer}"`,
+          duration: duration,
+          question: question,
+          questionId: questionId,
+          correctAnswer: correctAnswer,
+          temperature: temperature,
+          promptTokens: 0,
+          completionTokens: 0,
+          totalTokens: 0,
+          showFullRequest: false,
+        }]);
+        
+        return {
+          answer: "ERROR",
+          correct: false,
+          tokens: 0,
+          time: duration
+        };
+      }
       
       const tokens = data.usage?.total_tokens || estimateTokenCount(prompt + question + answer);
       const promptTokens = data.usage?.prompt_tokens || 0;
@@ -1704,12 +1732,28 @@ export default function Home() {
         };
       }
       
-      return {
-        answer: "ERROR",
-        correct: false,
-        tokens: 0,
-        time: duration
-      };
+      // Log the API error before rethrowing for auto-pause
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      setApiLogs(prev => [...prev, {
+        timestamp: Date.now(),
+        provider: model.provider,
+        model: model.name,
+        request: { question, temperature },
+        response: `API Error: ${errorMessage}`,
+        error: errorMessage,
+        duration: duration,
+        question: question,
+        questionId: questionId,
+        correctAnswer: correctAnswer,
+        temperature: temperature,
+        promptTokens: 0,
+        completionTokens: 0,
+        totalTokens: 0,
+        showFullRequest: false,
+      }]);
+      
+      // For all other errors (API failures, network issues, etc.), rethrow to trigger auto-pause
+      throw error;
     }
   };
 
@@ -1784,7 +1828,7 @@ export default function Home() {
             "Authorization": `Bearer ${storedConfig.key}`
           },
           body: JSON.stringify(requestBody),
-          signal: abortSignal || AbortSignal.timeout(60000),
+          signal: abortSignal || AbortSignal.timeout(600000), // 10 minutes for slow reasoning models
         });
 
         if (!response.ok) {
@@ -1845,6 +1889,15 @@ export default function Home() {
           showFullRequest: false,
         }]);
         
+        // Check for parsing failures - if too many answers are "ERROR", treat as API failure
+        const errorCount = answers.filter(answer => answer === "ERROR").length;
+        const errorRate = errorCount / batch.length;
+        
+        // If more than 50% of answers failed to parse, treat as API error and trigger auto-pause
+        if (errorRate > 0.5) {
+          throw new Error(`Response parsing failed: ${errorCount}/${batch.length} answers could not be parsed from model response. Raw response: "${responseText}"`);
+        }
+        
         // Create results for each question in the batch
         batch.forEach((q, idx) => {
           results.push({
@@ -1870,15 +1923,29 @@ export default function Home() {
             });
           });
         } else {
-          // Add error results for all questions in this batch
-          batch.forEach(() => {
-            results.push({
-              answer: "ERROR",
-              correct: false,
-              tokens: 0,
-              time: Math.floor(duration / batch.length)
-            });
-          });
+          // Log the API error for the batch before rethrowing for auto-pause
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          const batchQuestions = batch.map(q => q.question).join('; ');
+          setApiLogs(prev => [...prev, {
+            timestamp: Date.now(),
+            provider: model.provider,
+            model: model.name,
+            request: { batchQuestions, temperature },
+            response: `API Error: ${errorMessage}`,
+            error: errorMessage,
+            duration: duration,
+            question: `Batch of ${batch.length} questions: ${batchQuestions}`,
+            questionId: batch.map(q => q.id).join(','),
+            correctAnswer: batch.map(q => q.answer).join(','),
+            temperature: temperature,
+            promptTokens: 0,
+            completionTokens: 0,
+            totalTokens: 0,
+            showFullRequest: false,
+          }]);
+          
+          // For all other errors (API failures, network issues, etc.), rethrow to trigger auto-pause
+          throw error;
         }
       }
     }
@@ -2163,7 +2230,7 @@ export default function Home() {
         try {
           // Create AbortController for fetch timeout
           const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+          const timeoutId = setTimeout(() => controller.abort(), 180000); // 3 minutes timeout for model fetching
           
           try {
             const response = await fetch(`${baseUrl}/models`, {

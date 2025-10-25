@@ -22,8 +22,12 @@ The evaluation system now supports pausing and resuming evaluations, providing b
 
 ### 3. **Automatic Error Handling**
 - **Auto-Pause on API Errors**: When an API call fails (e.g., rate limits, network issues), the evaluation automatically pauses
+- **Auto-Pause on Response Parsing Errors**: When model responses cannot be parsed (e.g., invalid format, no A-D answers), the evaluation automatically pauses
+  - For single questions: Pauses if the response is not A, B, C, or D
+  - For batched questions: Pauses if more than 50% of responses fail to parse
 - **Error Display**: A detailed error toast message appears showing:
-  - Error description
+  - Error description with details about what went wrong
+  - Raw response from the model for debugging
   - Instruction to click "Resume" to retry
   - 10-second display duration
 - **Retry Logic**: When resumed after an error, the system will retry the exact same API call that failed
@@ -118,10 +122,15 @@ The system preserves position across four phases:
 4. **Inconsistent**: Additional 7 trials for inconsistent answers (batched)
 
 ### Error Recovery
-- Try/catch blocks around each API call
-- On error: Auto-pause and save exact position
+- Try/catch blocks around each API call and response parsing
+- On API error: Auto-pause and save exact position
+- On parsing error: Auto-pause with detailed error message
 - On resume: Retry the same call with same parameters
 - Failed calls don't increment progress
+- Error types detected:
+  - Network/API failures (rate limits, authentication, etc.)
+  - Invalid response format (non A-D answers, unparseable responses)
+  - Empty responses from models
 
 ## Best Practices
 
@@ -169,6 +178,40 @@ This ensures you never accidentally mix results from different model configurati
 2. **While paused**: Changing files/models clears pause state and enables fresh start
 3. **After completion**: Changing files/models clears results and prepares for new evaluation
 
+## API Timeout Settings
+
+### Timeout Configuration
+The system uses extended timeout values to accommodate slow reasoning models:
+
+- **Main API Calls**: 10 minutes (600,000ms)
+  - Used for single question evaluations and batch processing
+  - Accommodates the slowest reasoning models including OpenAI o1/o3 series
+  - Handles complex multi-step reasoning, batch processing, and network delays
+  - Timeout triggers auto-pause with error message for user to retry
+  
+- **Model Discovery**: 3 minutes (180,000ms)
+  - Used when fetching available models from API providers
+  - Adequate time for provider API to respond with model list under high load
+  - Less critical as this happens once during configuration
+
+### Timeout Benefits
+- **Slow Reasoning Models**: Accommodates models that take significant time to process complex questions
+  - OpenAI o1/o3 models can take 30+ seconds for complex reasoning
+  - Batch processing multiplies this time across multiple questions
+  - Some reasoning tasks require extensive "thinking time"
+- **Network Issues**: Allows for temporary network slowdowns without immediate failure
+- **Rate Limiting**: Provides buffer time during API rate limit recovery
+- **High Load Periods**: When API providers are under heavy usage
+- **Token-Heavy Responses**: Complex explanations and detailed reasoning take more time
+- **User Control**: When timeout occurs, auto-pause allows user to decide whether to retry or stop
+
+### Why 10 Minutes?
+- **Industry Standards**: Most production systems use 10-15 minute timeouts for reasoning models
+- **Real-world Performance**: o1 models can take 30+ seconds per complex question
+- **Batch Safety**: Multiple questions in batches compound the processing time
+- **Network Buffer**: Accounts for API latency and temporary slowdowns
+- **User Experience**: Reduces false timeouts that interrupt valid long-running operations
+
 ## Limitations
 
 - State is only preserved in browser memory (lost on page refresh)
@@ -176,6 +219,7 @@ This ensures you never accidentally mix results from different model configurati
 - Changing selected models automatically clears any paused evaluation
 - Stop button clears all saved state (cannot resume after stop)
 - Auto-pause only occurs on API errors, not browser/system errors
+- Extended timeouts may delay error detection for truly failed requests
 
 ## Future Enhancements
 
