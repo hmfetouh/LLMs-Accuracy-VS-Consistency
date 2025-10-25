@@ -142,9 +142,9 @@ The system preserves position across four phases:
   - "API Error - Evaluation Paused" - when auto-paused due to error
   - "Evaluation Stopped" - when manually stopped
 
-## Smart File Change Detection
+## Smart Change Detection
 
-### Automatic State Reset
+### File Change Detection
 When you upload a new CSV file while an evaluation is paused:
 - **Pause state is automatically cleared**
 - **Saved evaluation progress is discarded**
@@ -154,15 +154,26 @@ When you upload a new CSV file while an evaluation is paused:
 
 This ensures you never accidentally mix data from different CSV files or resume an evaluation with outdated questions.
 
+### Model Change Detection
+When you add or remove models while an evaluation is paused:
+- **Pause state is automatically cleared**
+- **Saved evaluation progress is discarded**
+- **Button changes from "Resume" back to "Start Evaluation"**
+- **Previous results are cleared from the table**
+- **Toast notification confirms the reset**
+
+This ensures you never accidentally mix results from different model configurations or resume an evaluation with incompatible models.
+
 ### Behavior Examples
-1. **During active evaluation**: Changing files stops the current evaluation
-2. **While paused**: Changing files clears pause state and enables fresh start
-3. **After completion**: Changing files clears results and prepares for new evaluation
+1. **During active evaluation**: Changing files/models stops the current evaluation
+2. **While paused**: Changing files/models clears pause state and enables fresh start
+3. **After completion**: Changing files/models clears results and prepares for new evaluation
 
 ## Limitations
 
 - State is only preserved in browser memory (lost on page refresh)
 - Uploading new CSV file automatically clears any paused evaluation
+- Changing selected models automatically clears any paused evaluation
 - Stop button clears all saved state (cannot resume after stop)
 - Auto-pause only occurs on API errors, not browser/system errors
 

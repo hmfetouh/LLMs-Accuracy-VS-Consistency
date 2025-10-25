@@ -257,7 +257,42 @@ export default function Home() {
       localStorage.removeItem('hasLoadedModels');
     };
   }, [storedApiConfigs.length > 0 ? 'loaded' : 'empty']);
+  
   const toast = useToast();
+
+  // Reset pause/resume state when selected models change
+  const prevSelectedModelsRef = useRef<Model[]>([]);
+  useEffect(() => {
+    // Only check for changes after initial load (prevent triggering on component mount)
+    if (prevSelectedModelsRef.current.length > 0) {
+      // Check if models have actually changed
+      const currentModelIds = selectedModels.map(m => m.id).sort().join(',');
+      const prevModelIds = prevSelectedModelsRef.current.map(m => m.id).sort().join(',');
+      
+      if (currentModelIds !== prevModelIds) {
+        // Models have changed, reset pause state if evaluation is paused
+        if (isPaused || evaluationState) {
+          setIsPaused(false);
+          setShouldPauseEvaluation(false);
+          shouldPauseRef.current = false;
+          setEvaluationState(null);
+          setTrialResults([]); // Clear previous results
+          setResults([]);
+          setApiLogs([]);
+          
+          toast({
+            title: "Models Changed",
+            description: "Previous evaluation state has been cleared. You can start a fresh evaluation.",
+            status: "info",
+            duration: 3000,
+          });
+        }
+      }
+    }
+    
+    // Update the ref to current models
+    prevSelectedModelsRef.current = [...selectedModels];
+  }, [selectedModels, isPaused, evaluationState]);
 
   const getApiKey = () => apiConfigs[currentProvider].key;
   const getBaseUrl = () => apiConfigs[currentProvider].baseUrl || "";
@@ -1441,6 +1476,9 @@ export default function Home() {
           correctAnswer: q.answer,
           modelResults: {}
         }));
+
+        // Set trial results immediately to show the table before first API call
+        setTrialResults([...trialResultsArray]);
 
         // Start the evaluation loop with initial state
         await runEvaluationLoop({
