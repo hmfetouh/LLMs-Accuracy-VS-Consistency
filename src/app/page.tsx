@@ -114,6 +114,7 @@ interface TrialResult {
 interface QuestionResult {
   questionId: string;
   question: string;
+  class?: string; // question classification (class, category, group, step) - optional for backward compatibility
   length: number; // character count
   correctAnswer: string;
   modelResults: Record<string, {
@@ -188,6 +189,9 @@ export default function Home() {
   
   // State for storing API configurations
   const [storedApiConfigs, setStoredApiConfigs] = useState<StoredApiConfig[]>([]);
+  
+  // State to track if class column exists in the loaded CSV
+  const [hasClassColumn, setHasClassColumn] = useState<boolean>(false);
   
   // Load stored configs from localStorage after component mounts
   useEffect(() => {
@@ -480,7 +484,12 @@ export default function Home() {
       let csv = '';
       
       // Header row
-      const headerRow = ['#', 'Question', 'Len (Char)', 'Correct'];
+      const headerRow = ['#'];
+      if (hasClassColumn) {
+        headerRow.push('Class');
+      }
+      headerRow.push('Question', 'Len (Char)', 'Correct');
+      
       selectedModels.forEach(model => {
         headerRow.push(
           `${model.name} - Tokens`,
@@ -495,12 +504,17 @@ export default function Home() {
       
       // Data rows
       trialResults.forEach((result, index) => {
-        const row = [
-          index + 1,
+        const row: (string | number)[] = [index + 1];
+        
+        if (hasClassColumn) {
+          row.push(result.class || '-');
+        }
+        
+        row.push(
           `"${result.question.replace(/"/g, '""')}"`,
           result.length,
           result.correctAnswer
-        ];
+        );
         
         selectedModels.forEach(model => {
           const modelResult = result.modelResults[model.id];
@@ -687,6 +701,7 @@ export default function Home() {
           setResults([]);
           setTrialResults([]);
           setApiLogs([]);
+          setHasClassColumn(false); // Reset class column state
           const content = e.target?.result as string;
         // Handle both Windows (\r\n) and Unix (\n) line endings
         const lines = content.replace(/\r\n/g, '\n').split('\n').filter(line => line.trim());
@@ -731,6 +746,17 @@ export default function Home() {
         
         
         // Find the indices of required columns - more flexible matching
+        let classIndex = headerParts.findIndex(h => 
+          h === 'class' || 
+          h === 'category' || 
+          h === 'catogory' || // handle typo
+          h === 'group' || 
+          h === 'step'
+        );
+        
+        // Set state to track if class column exists
+        setHasClassColumn(classIndex !== -1);
+        
         let idIndex = headerParts.findIndex(h => h.includes('id'));
         let questionIndex = headerParts.findIndex(h => h.includes('question'));
         let answerIndex = headerParts.findIndex(h => 
@@ -786,7 +812,7 @@ export default function Home() {
         const questions = lines.slice(1); // Skip header row
         
         // Parse all questions into array
-        const parsedQuestions: Array<{id: string, question: string, answer: string}> = [];
+        const parsedQuestions: Array<{id: string, question: string, answer: string, class?: string}> = [];
         
         for (let i = 0; i < questions.length; i++) {
           try {
@@ -807,13 +833,20 @@ export default function Home() {
             }
             parts.push(current.trim());
             
-            const maxIndex = Math.max(idIndex, questionIndex, answerIndex);
+            const maxIndex = Math.max(classIndex === -1 ? -1 : classIndex, idIndex, questionIndex, answerIndex);
             if (parts.length > maxIndex) {
-              parsedQuestions.push({
+              const questionData: any = {
                 id: parts[idIndex].trim(),
                 question: parts[questionIndex].trim(),
                 answer: parts[answerIndex].trim().toUpperCase()
-              });
+              };
+              
+              // Add class if column exists
+              if (classIndex !== -1 && parts[classIndex]) {
+                questionData.class = parts[classIndex].trim();
+              }
+              
+              parsedQuestions.push(questionData);
             }
           } catch (error) {
           }
@@ -824,6 +857,7 @@ export default function Home() {
         const trialResultsArray: QuestionResult[] = parsedQuestions.map(q => ({
           questionId: q.id,
           question: q.question,
+          class: q.class, // Include class if available
           length: q.question.length,
           correctAnswer: q.answer,
           modelResults: {}
@@ -1575,14 +1609,22 @@ export default function Home() {
           const missingColumnsStr = missingColumns.join(", ");
           toast({
             title: "Missing required columns",
-            description: `CSV is missing: ${missingColumnsStr}. Required columns: ID, Question, and Correct.`,
+            description: `CSV is missing: ${missingColumnsStr}. Required columns: ID, Question, and Correct. Optional: Class/Category/Group/Step.`,
             status: "warning",
             duration: 5000,
           });
         } else {
+          // Check if class column exists for informational message
+          const hasClass = headerParts.some(h => 
+            h === 'class' || h === 'category' || h === 'catogory' || h === 'group' || h === 'step'
+          );
+          
+          // Update state to track class column availability
+          setHasClassColumn(hasClass);
+          
           toast({
             title: "CSV file loaded",
-            description: `Successfully loaded CSV with ${lines.length - 1} questions`,
+            description: `Successfully loaded CSV with ${lines.length - 1} questions${hasClass ? ' (with classification)' : ''}`,
             status: "success",
             duration: 3000,
           });
@@ -2588,6 +2630,9 @@ export default function Home() {
                       <Thead>
                         <Tr>
                           <Th rowSpan={2} borderRight="1px" borderColor="gray.200" fontSize="10px" minW="30px" maxW="40px">#</Th>
+                          {hasClassColumn && (
+                            <Th rowSpan={2} borderRight="1px" borderColor="gray.200" fontSize="10px" minW="60px" maxW="80px">Class</Th>
+                          )}
                           <Th rowSpan={2} borderRight="1px" borderColor="gray.200" fontSize="10px" minW="150px" maxW="250px">Question</Th>
                           <Th rowSpan={2} borderRight="1px" borderColor="gray.200" fontSize="10px" minW="40px" maxW="50px">Len<br/>(Char)</Th>
                           <Th rowSpan={2} borderRight="2px" borderColor="gray.300" fontSize="10px" minW="40px" maxW="50px">Correct</Th>
@@ -2614,6 +2659,11 @@ export default function Home() {
                         {trialResults.map((result, index) => (
                           <Tr key={result.questionId} _hover={{ bg: "gray.50" }}>
                             <Td borderRight="1px" borderColor="gray.200" fontWeight="medium" fontSize="xs">{index + 1}</Td>
+                            {hasClassColumn && (
+                              <Td borderRight="1px" borderColor="gray.200" fontSize="xs" maxW="80px" overflow="hidden" textOverflow="ellipsis" whiteSpace="nowrap">
+                                {result.class || '-'}
+                              </Td>
+                            )}
                             <Td borderRight="1px" borderColor="gray.200" maxW="200px" overflow="hidden" textOverflow="ellipsis" whiteSpace="nowrap" fontSize="xs">
                               {result.question}
                             </Td>
