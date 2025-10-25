@@ -47,6 +47,7 @@ interface Model {
   name: string;
   provider: Provider;
   apiModelId?: string; // The actual model ID to send to the API
+  reasoningEffort?: string; // For GPT-5 models: "low", "medium", "high"
 }
 
 interface StoredApiConfig {
@@ -1604,6 +1605,11 @@ export default function Home() {
         requestBody.temperature = temperature;
       }
       
+      // Add reasoning_effort parameter for GPT-5 and O-series models if specified
+      if (model.reasoningEffort && model.provider === 'openai') {
+        requestBody.reasoning_effort = model.reasoningEffort;
+      }
+      
       // max_tokens: 1200,
       //stop: ["\n\n"],
 
@@ -1813,6 +1819,11 @@ export default function Home() {
             { role: "user", content: combinedQuestion }
           ];
           requestBody.temperature = temperature;
+        }
+        
+        // Add reasoning_effort parameter for GPT-5 and O-series models if specified
+        if (model.reasoningEffort && model.provider === 'openai') {
+          requestBody.reasoning_effort = model.reasoningEffort;
         }
         
         //max_tokens: 500, // Increased to allow for more verbose responses
@@ -2262,17 +2273,96 @@ export default function Home() {
           }
           
           const data = await response.json();
-          const providerModels = data.data.map((model: any) => {
+          const providerModels: Model[] = [];
+          
+          data.data.forEach((model: any) => {
             // Check if model.id already contains the provider name to avoid duplication
             const modelAlreadyHasProvider = model.id.toLowerCase().includes(provider.toLowerCase());
+            const baseId = modelAlreadyHasProvider ? `provider-${provider}-${model.id}` : `${provider}-${model.id}`;
             
-            return {
-              // Create a unique ID that avoids duplication
-              id: modelAlreadyHasProvider ? `provider-${provider}-${model.id}` : `${provider}-${model.id}`,
-              name: model.id,
-              provider: provider,
-              apiModelId: model.id, // Store the original API model ID
-            };
+            // Check if this is a GPT-5 model that supports reasoning_effort
+            // Matches: gpt-5, gpt-5-2025-08-07, etc.
+            const isGPT5BaseModel = /^gpt-5(-\d{4}-\d{2}-\d{2})?$/i.test(model.id);
+            
+            // Matches: gpt-5-mini, gpt-5-nano, gpt-5-mini-2025-08-07, gpt-5-nano-2025-08-07, etc.
+            const isGPT5MiniOrNano = /^gpt-5-(mini|nano)(-\d{4}-\d{2}-\d{2})?$/i.test(model.id);
+            
+            // Check if this is an O-series model that supports reasoning_effort (excluding o1-mini)
+            // Matches: o1, o3, o3-mini, o4-mini, o1-2024-12-17, o3-2024-12-17, o3-mini-2024-12-17, etc.
+            const isOSeriesWithReasoning = /^(o1|o3|o3-mini|o4-mini)(-\d{4}-\d{2}-\d{2})?$/i.test(model.id);
+            
+            if (provider === 'openai') {
+              if (isGPT5BaseModel) {
+                // GPT-5 base model has minimal/low/medium/high options
+                const reasoningEfforts = [
+                  { effort: 'minimal', suffix: ' (Minimal reasoning)' },
+                  { effort: 'low', suffix: ' (Low reasoning)' },
+                  { effort: 'medium', suffix: ' (Medium reasoning - Default)' },
+                  { effort: 'high', suffix: ' (High reasoning)' }
+                ];
+                
+                reasoningEfforts.forEach(({ effort, suffix }) => {
+                  providerModels.push({
+                    id: `${baseId}-${effort}`,
+                    name: `${model.id}${suffix}`,
+                    provider: provider,
+                    apiModelId: model.id,
+                    reasoningEffort: effort
+                  });
+                });
+              } else if (isGPT5MiniOrNano) {
+                // GPT-5-mini and GPT-5-nano have minimal/low/medium/high options
+                const reasoningEfforts = [
+                  { effort: 'minimal', suffix: ' (Minimal reasoning)' },
+                  { effort: 'low', suffix: ' (Low reasoning)' },
+                  { effort: 'medium', suffix: ' (Medium reasoning - Default)' },
+                  { effort: 'high', suffix: ' (High reasoning)' }
+                ];
+                
+                reasoningEfforts.forEach(({ effort, suffix }) => {
+                  providerModels.push({
+                    id: `${baseId}-${effort}`,
+                    name: `${model.id}${suffix}`,
+                    provider: provider,
+                    apiModelId: model.id,
+                    reasoningEffort: effort
+                  });
+                });
+              } else if (isOSeriesWithReasoning) {
+                // O-series models (o1, o3, o3-mini, o4-mini) have low/medium/high options
+                const reasoningEfforts = [
+                  { effort: 'low', suffix: ' (Low reasoning)' },
+                  { effort: 'medium', suffix: ' (Medium reasoning - Default)' },
+                  { effort: 'high', suffix: ' (High reasoning)' }
+                ];
+                
+                reasoningEfforts.forEach(({ effort, suffix }) => {
+                  providerModels.push({
+                    id: `${baseId}-${effort}`,
+                    name: `${model.id}${suffix}`,
+                    provider: provider,
+                    apiModelId: model.id,
+                    reasoningEffort: effort
+                  });
+                });
+              } else {
+                // Regular model without reasoning effort variants
+                providerModels.push({
+                  id: baseId,
+                  name: model.id,
+                  provider: provider,
+                  apiModelId: model.id,
+                });
+              }
+            } else {
+              // Non-OpenAI providers - regular models
+              providerModels.push({
+                id: baseId,
+                name: model.id,
+                provider: provider,
+                apiModelId: model.id,
+              });
+            }
           });
           
           newModels = [...newModels, ...providerModels];

@@ -86,6 +86,64 @@ To manage API costs:
 3. Click "Resume" when ready to continue
 4. Or click "Stop" to permanently end evaluation
 
+## GPT-5 and O-Series Reasoning Effort Support
+
+### Overview
+The system now supports OpenAI's `reasoning_effort` parameter for GPT-5 and O-series models, allowing you to control the computational effort spent on reasoning tasks.
+
+### Available Model Variants
+
+#### **GPT-5 Base Model**
+When detected, creates four variants with minimal/low/medium/high options:
+- **GPT-5 (Minimal reasoning)**: Uses `reasoning.effort: "minimal"` - fastest, minimal computational effort
+- **GPT-5 (Low reasoning)**: Uses `reasoning.effort: "low"` - faster, less computational effort
+- **GPT-5 (Medium reasoning - Default)**: Uses `reasoning.effort: "medium"` - balanced performance (default)
+- **GPT-5 (High reasoning)**: Uses `reasoning.effort: "high"` - maximum reasoning effort, slower but potentially more accurate
+
+**Date-versioned variants** like `gpt-5-2025-08-07` are also supported and create the same four reasoning effort options.
+
+#### **GPT-5-mini and GPT-5-nano**
+Both models create four variants with minimal/low/medium/high options:
+- **GPT-5-mini/nano (Minimal reasoning)**: Uses `reasoning.effort: "minimal"`
+- **GPT-5-mini/nano (Low reasoning)**: Uses `reasoning.effort: "low"`
+- **GPT-5-mini/nano (Medium reasoning - Default)**: Uses `reasoning.effort: "medium"` (default)
+- **GPT-5-mini/nano (High reasoning)**: Uses `reasoning.effort: "high"`
+
+**Date-versioned variants** like `gpt-5-mini-2025-08-07` or `gpt-5-nano-2024-12-17` are also supported.
+
+#### **O-Series Models (o1, o3, o3-mini, o4-mini)**
+Excludes o1-mini, creates three variants with low/medium/high options:
+- **o1/o3/o3-mini/o4-mini (Low reasoning)**: Uses `reasoning.effort: "low"`
+- **o1/o3/o3-mini/o4-mini (Medium reasoning - Default)**: Uses `reasoning.effort: "medium"` (default)
+- **o1/o3/o3-mini/o4-mini (High reasoning)**: Uses `reasoning.effort: "high"`
+
+**Date-versioned variants** like `o1-2024-12-17`, `o3-2025-01-15`, or `o3-mini-2024-12-17` are also supported.
+
+### Implementation Details
+- **Automatic Detection**: 
+  - GPT-5 base: `/^gpt-5(-\d{4}-\d{2}-\d{2})?$/i` (includes date-versioned variants)
+  - GPT-5 mini/nano: `/^gpt-5-(mini|nano)(-\d{4}-\d{2}-\d{2})?$/i` (includes date-versioned variants)
+  - O-series: `/^(o1|o3|o3-mini|o4-mini)(-\d{4}-\d{2}-\d{2})?$/i` (includes date-versioned variants, excludes o1-mini)
+- **Date-Versioned Models**: Supports models like `gpt-5-2025-08-07`, `o1-2024-12-17`, `gpt-5-mini-2025-08-07`, etc.
+- **API Parameter**: Adds `reasoning_effort: "minimal|low|medium|high"` as a top-level parameter to API requests
+- **Model Variants**: Creates separate selectable models for each effort level
+- **Default Value**: Medium reasoning is the default (indicated by "- Default" suffix)
+- **Compatibility**: Only applies to OpenAI GPT-5 and O-series models (including date-versioned variants)
+
+### Usage
+1. Load OpenAI models from the API configuration sidebar
+2. Supported models will appear as multiple separate options in the model selection dropdown
+3. Select the desired reasoning effort level (e.g., "GPT-5 (High reasoning)")
+4. The system automatically includes the appropriate `reasoning_effort` parameter in API calls
+5. Models marked with "- Default" use the default medium reasoning effort
+
+### Benefits
+- **Performance Control**: Choose between speed and accuracy based on your needs
+- **Cost Optimization**: Lower reasoning effort may result in faster responses and lower costs
+- **Comparative Analysis**: Compare different reasoning levels within the same evaluation
+- **Flexibility**: Different model families support different effort levels
+- **Clear Defaults**: Easily identify which option is the default behavior
+
 ## Technical Implementation
 
 ### State Management
