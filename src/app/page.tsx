@@ -59,25 +59,25 @@ interface StoredApiConfig {
 
 const NoFileSelected = () => (
   <Box 
-    bg="purple.50" 
+    bg="blue.50" 
     p={4}
     py="45px"
     borderRadius="md" 
     borderWidth="1px" 
-    borderColor="purple.200" 
+    borderColor="blue.200" 
     height="160px"
   >
     <VStack spacing={4} align="stretch" justify="center" height="full">
       <Box>
-        <Text fontSize="sm" color="purple.600" mb={0.5}>File Status</Text>
-        <Text fontSize="md" color="purple.900" fontWeight="medium">
+        <Text fontSize="sm" color="blue.600" mb={0.5}>File Status</Text>
+        <Text fontSize="md" color="blue.900" fontWeight="medium">
           No file selected
         </Text>
       </Box>
       
       <Box>
-        <Text fontSize="sm" color="purple.600" mb={0.5}>Question Count</Text>
-        <Text fontSize="xl" color="purple.700" fontWeight="bold">
+        <Text fontSize="sm" color="blue.600" mb={0.5}>Question Count</Text>
+        <Text fontSize="xl" color="blue.700" fontWeight="bold">
           -
         </Text>
         <Text fontSize="xs" color="gray.500" mt={0.5}>
@@ -1813,7 +1813,7 @@ export default function Home() {
           top="0" 
           left="0" 
           right="0" 
-          bg="purple.500" 
+          bg="blue.500" 
           color="white" 
           py={2} 
           px={6}
@@ -1849,10 +1849,10 @@ export default function Home() {
       {/* Sidebar */}
       <Box
         w="280px"
-        bg="purple.50"
+        bg="blue.50"
         p={6}
         borderRight="1px"
-        borderColor="purple.100"
+        borderColor="blue.100"
         position="fixed"
         h="100vh"
         left={0}
@@ -1861,8 +1861,8 @@ export default function Home() {
       >
         <VStack spacing={6} align="stretch">
           <Box mb={5}>
-            <Heading size="md" color="purple.700" mb={1}>LLM Evaluation</Heading>
-            <Text fontSize="sm" color="purple.600">Accuracy vs Consistency</Text>
+            <Heading size="md" color="blue.700" mb={1}>LLM Evaluation</Heading>
+            <Text fontSize="sm" color="blue.600">Accuracy vs Consistency</Text>
           </Box>
 
           <VStack spacing={2} align="stretch">
@@ -1874,7 +1874,7 @@ export default function Home() {
                 py={3}
                 pl={4}
                 leftIcon={
-                  <Box p={1} bg="purple.100" borderRadius="md">
+                  <Box p={1} bg="blue.100" borderRadius="md">
                     <Text fontSize="sm">{item.icon}</Text>
                   </Box>
                 }
@@ -1885,8 +1885,8 @@ export default function Home() {
                     element?.scrollIntoView({ behavior: "smooth" });
                   }, 0);
                 }}
-                _hover={{ bg: "purple.100" }}
-                color="purple.700"
+                _hover={{ bg: "blue.100" }}
+                color="blue.700"
                 fontSize="sm"
                 fontWeight="medium"
               >
@@ -1896,9 +1896,9 @@ export default function Home() {
           </VStack>
           
           {/* API Configuration Section */}
-          <Box mt="auto" pt={7} borderTop="1px" borderColor="purple.100" className="api-config-section">
+          <Box mt="auto" pt={7} borderTop="1px" borderColor="blue.100" className="api-config-section">
             <VStack spacing={2} align="stretch">
-              <Text fontSize="s" fontWeight="600" color="purple.700" mb={1}>Load API Models</Text>
+              <Text fontSize="s" fontWeight="600" color="blue.700" mb={1}>Load API Models</Text>
 
               <FormControl size="sm">
                 <FormLabel fontSize="xs" mb={0.5} fontWeight="600">Provider</FormLabel>
@@ -1936,7 +1936,7 @@ export default function Home() {
 
               <Button
                 size="xs"
-                colorScheme="purple"
+                colorScheme="blue"
                 onClick={addApiConfig}
                 isLoading={isLoading}
                 mb={3}
@@ -1946,7 +1946,7 @@ export default function Home() {
 
               <Box mt={2}>
                 <HStack justify="space-between" align="center">
-                  <Text fontSize="xs" fontWeight="bold" color="purple.700" mb={2}>
+                  <Text fontSize="xs" fontWeight="bold" color="blue.700" mb={2}>
                     Saved Configurations
                   </Text>
                   <HStack spacing={1}>
@@ -1954,7 +1954,7 @@ export default function Home() {
                       <Button
                         size="xs"
                         variant="ghost"
-                        colorScheme="purple"
+                        colorScheme="blue"
                         onClick={() => verifyApiKey()}
                         title="Refresh API models"
                         isLoading={isLoading}
@@ -1965,7 +1965,7 @@ export default function Home() {
                         🔄
                       </Button>
                     )}
-                    <Text fontSize="xs" color="purple.500" fontWeight="medium">
+                    <Text fontSize="xs" color="blue.500" fontWeight="medium">
                       {storedApiConfigs.length} {storedApiConfigs.length === 1 ? 'config' : 'configs'}
                     </Text>
                   </HStack>
@@ -1990,11 +1990,11 @@ export default function Home() {
                       </Text>
                       <HStack spacing={0} fontSize="10px" color="gray.500">
                         <Text>Supported providers:</Text>
-                        <Text fontWeight="medium" color="purple.600" ml={1}>OpenAI</Text>
+                        <Text fontWeight="medium" color="blue.600" ml={1}>OpenAI</Text>
                         <Text mx={1}>•</Text>
-                        <Text fontWeight="medium" color="purple.600">DeepSeek</Text>
+                        <Text fontWeight="medium" color="blue.600">DeepSeek</Text>
                         <Text mx={1}>•</Text>
-                        <Text fontWeight="medium" color="purple.600">OpenWebUI</Text>
+                        <Text fontWeight="medium" color="blue.600">OpenWebUI</Text>
                       </HStack>
                     </VStack>
                   </Box>
@@ -2003,7 +2003,7 @@ export default function Home() {
                     {storedApiConfigs.map((config) => (
                       <Box
                         key={config.id}
-                        bg="purple.50"
+                        bg="blue.50"
                         borderRadius="md"
                         fontSize="xs"
                         py={1.5}
@@ -2012,10 +2012,10 @@ export default function Home() {
                         pr={7}
                         borderWidth="1px"
                         fontWeight={"medium"}
-                        borderColor="purple.200"
+                        borderColor="blue.200"
                         _hover={{
-                          borderColor: "purple.300",
-                          bg: "purple.75"
+                          borderColor: "blue.300",
+                          bg: "blue.75"
                         }}
                       >
                         <HStack spacing={2} align="flex-start">
@@ -2027,7 +2027,7 @@ export default function Home() {
                             mt="6px"
                           />
                           <VStack spacing={0.5} align="flex-start">
-                            <Text fontWeight="bold" color="purple.700">
+                            <Text fontWeight="bold" color="blue.700">
                               {config.provider === 'openai' ? 'OpenAI' : 
                                config.provider === 'deepseek' ? 'DeepSeek' : 
                                config.provider === 'openwebui' ? 'Open WebUI' : 
@@ -2055,7 +2055,7 @@ export default function Home() {
                           <Button 
                             size="xs" 
                             variant="unstyled"
-                            color="purple.600"
+                            color="blue.600"
                             fontSize="10px"
                             onClick={() => verifyApiKey(config.id)}
                             title="Refresh models"
@@ -2073,7 +2073,7 @@ export default function Home() {
                           <Button 
                             size="xs" 
                             variant="unstyled"
-                            color="purple.600"
+                            color="blue.600"
                             fontSize="10px"
                             onClick={() => removeApiConfig(config.id)}
                             title="Remove configuration"
@@ -2111,12 +2111,12 @@ export default function Home() {
           bg="white" 
           boxShadow="lg" 
           border="1px" 
-          borderColor="purple.100"
+          borderColor="blue.100"
           scroll-margin-top="2rem"
         >
           <HStack spacing={2} mb={4}>
-            <Box p={1.5} bg="purple.100" borderRadius="md">
-              <Text fontSize="sm" color="purple.600">🤖</Text>
+            <Box p={1.5} bg="blue.100" borderRadius="md">
+              <Text fontSize="sm" color="blue.600">🤖</Text>
             </Box>
             <Heading size="sm">Add Large Language Models (LLMs)</Heading>
           </HStack>
@@ -2216,17 +2216,17 @@ export default function Home() {
                       return (
                         <Box
                           key={model.id}
-                          bg={hasValidKey ? "purple.50" : "yellow.50"}
+                          bg={hasValidKey ? "blue.50" : "yellow.50"}
                           border="1px"
-                          borderColor={hasValidKey ? "purple.200" : "yellow.300"}
+                          borderColor={hasValidKey ? "blue.200" : "yellow.300"}
                           borderRadius="md"
                           px={3}
                           py={1.5}
                         >
                           <HStack spacing={2} align="center">
-                            <Text fontSize="xs" color={hasValidKey ? "purple.700" : "yellow.700"}>
-                              <Text as="span" color={hasValidKey ? "purple.500" : "yellow.600"} mr={1}>{index + 1}.</Text>
-                              <Text as="span" color={hasValidKey ? "purple.500" : "yellow.600"}>{model.provider}/</Text>
+                            <Text fontSize="xs" color={hasValidKey ? "blue.700" : "yellow.700"}>
+                              <Text as="span" color={hasValidKey ? "blue.500" : "yellow.600"} mr={1}>{index + 1}.</Text>
+                              <Text as="span" color={hasValidKey ? "blue.500" : "yellow.600"}>{model.provider}/</Text>
                               {model.name}
                               {!hasValidKey && (
                                 <Text as="span" color="red.500" ml={1} fontWeight="bold">
@@ -2260,7 +2260,7 @@ export default function Home() {
                               <Button
                                 size="xs"
                                 variant="ghost"
-                                colorScheme={hasValidKey ? "purple" : "yellow"}
+                                colorScheme={hasValidKey ? "blue" : "yellow"}
                                 onClick={() => setSelectedModels(prev => prev.filter(m => m.id !== model.id))}
                                 p={1}
                                 height="auto"
@@ -2288,15 +2288,15 @@ export default function Home() {
           bg="white" 
           boxShadow="lg" 
           border="1px" 
-          borderColor="purple.100"
+          borderColor="blue.100"
           scroll-margin-top="2rem"
         >
           <HStack spacing={8} align="flex-start">
             {/* Left Column */}
             <VStack spacing={4} align="stretch" flex="1">
               <HStack spacing={2}>
-                <Box p={1.5} bg="purple.100" borderRadius="md">
-                  <Text fontSize="sm" color="purple.600">📝</Text>
+                <Box p={1.5} bg="blue.100" borderRadius="md">
+                  <Text fontSize="sm" color="blue.600">📝</Text>
                 </Box>
                 <Heading size="sm">MCQ Database</Heading>
               </HStack>
@@ -2312,7 +2312,7 @@ export default function Home() {
 
               <Button
                 leftIcon={<AttachmentIcon />}
-                colorScheme="purple"
+                colorScheme="blue"
                 variant="solid"
                 onClick={() => {
                   setTimeout(() => {
@@ -2337,18 +2337,18 @@ export default function Home() {
             {/* Right Column */}
             <VStack spacing={3} align="stretch" flex="1" mt={1}>
               {selectedFile ? (
-                <Box bg="purple.50" p={4} borderRadius="md" borderWidth="1px" borderColor="purple.200">
+                <Box bg="blue.50" p={4} borderRadius="md" borderWidth="1px" borderColor="blue.200">
                   <VStack align="stretch" spacing={2}>
                     <Box>
-                      <Text fontSize="sm" color="purple.600" mb={0.5}>Current File</Text>
-                      <Text fontSize="md" color="purple.900" fontWeight="medium">
+                      <Text fontSize="sm" color="blue.600" mb={0.5}>Current File</Text>
+                      <Text fontSize="md" color="blue.900" fontWeight="medium">
                         {selectedFile.name}
                       </Text>
                     </Box>
                     
                     <Box>
-                      <Text fontSize="sm" color="purple.600" mb={0.5}>Question Count</Text>
-                      <Text fontSize="xl" color="purple.700" fontWeight="bold" display="inline">
+                      <Text fontSize="sm" color="blue.600" mb={0.5}>Question Count</Text>
+                      <Text fontSize="xl" color="blue.700" fontWeight="bold" display="inline">
                         {questionCount > 0 ? `${questionCount.toLocaleString()} ` : '...'}
                         <Text as="span" fontSize="xs" color="gray.500">
                           {questionCount > 0 ? 'questions loaded' : 'Processing file...'}
@@ -2378,12 +2378,12 @@ export default function Home() {
           bg="white" 
           boxShadow="lg" 
           border="1px" 
-          borderColor="purple.100"
+          borderColor="blue.100"
           scroll-margin-top="2rem"
         >
           <HStack spacing={2} mb={4}>
-            <Box p={1.5} bg="purple.100" borderRadius="md">
-              <Text fontSize="sm" color="purple.600">⚙️</Text>
+            <Box p={1.5} bg="blue.100" borderRadius="md">
+              <Text fontSize="sm" color="blue.600">⚙️</Text>
             </Box>
             <Heading size="sm">LLMs Configuration</Heading>
           </HStack>
@@ -2399,7 +2399,7 @@ export default function Home() {
                     min={0}
                     max={2}
                     step={0.1}
-                    colorScheme="purple"
+                    colorScheme="blue"
                     size="sm"
                   >
                     <SliderTrack>
@@ -2415,7 +2415,7 @@ export default function Home() {
                 <Box mt={2}>
                   <HStack spacing={3}>
                     <Button
-                      colorScheme="purple"
+                      colorScheme="blue"
                       maxW="250px"
                       isDisabled={isEvaluating || selectedModels.length === 0 || !selectedFile}
                       size="md"
@@ -2460,14 +2460,14 @@ export default function Home() {
             <Box mt={4}>
               {isEvaluating && (
                 <Box w="100%" maxW="300px" mt={3}>
-                  <Text fontSize="sm" color="purple.600" mb={1}>
+                  <Text fontSize="sm" color="blue.600" mb={1}>
                     Progress: {Math.round((progress.current / progress.total) * 100)}%
                   </Text>
-                  <Box w="full" h="2px" bg="purple.100" borderRadius="full" overflow="hidden">
+                  <Box w="full" h="2px" bg="blue.100" borderRadius="full" overflow="hidden">
                     <Box
                       w={`${(progress.current / progress.total) * 100}%`}
                       h="full"
-                      bg="purple.500"
+                      bg="blue.500"
                       transition="width 0.3s ease-in-out"
                     />
                   </Box>
@@ -2484,31 +2484,31 @@ export default function Home() {
           bg="white" 
           boxShadow="lg" 
           border="1px" 
-          borderColor="purple.100"
+          borderColor="blue.100"
           scroll-margin-top="2rem"
           mb={9}
         >
           <HStack spacing={2} mb={4}>
-            <Box p={1.5} bg="purple.100" borderRadius="md">
-              <Text fontSize="sm" color="purple.600">📊</Text>
+            <Box p={1.5} bg="blue.100" borderRadius="md">
+              <Text fontSize="sm" color="blue.600">📊</Text>
             </Box>
             <Heading size="sm">Evaluation Results</Heading>
           </HStack>
 
           {results.length === 0 && trialResults.length === 0 ? (
             <Box 
-              bg="purple.50" 
+              bg="blue.50" 
               p={8} 
               borderRadius="md" 
               borderWidth="1px" 
-              borderColor="purple.200"
+              borderColor="blue.200"
               textAlign="center"
             >
               <VStack spacing={4}>
                 <Box
                   w="48px"
                   h="48px"
-                  bg="purple.100"
+                  bg="blue.100"
                   borderRadius="full"
                   display="flex"
                   alignItems="center"
@@ -2519,10 +2519,10 @@ export default function Home() {
                   <Text fontSize="24px">📈</Text>
                 </Box>
                 <VStack spacing={1}>
-                  <Text fontSize="lg" fontWeight="medium" color="purple.700">
+                  <Text fontSize="lg" fontWeight="medium" color="blue.700">
                     No evaluation results yet
                   </Text>
-                  <Text fontSize="sm" color="purple.600">
+                  <Text fontSize="sm" color="blue.600">
                     Results will appear here once you start the evaluation
                   </Text>
                 </VStack>
@@ -2543,7 +2543,7 @@ export default function Home() {
                       key={tab.id}
                       size="sm"
                       variant={activeResultTab === tab.id ? "solid" : "outline"}
-                      colorScheme="purple"
+                      colorScheme="blue"
                       borderRadius="full"
                       px={6}
                       onClick={() => setActiveResultTab(tab.id as "results" | "summary" | "charts" | "logs")}
@@ -2560,7 +2560,7 @@ export default function Home() {
                   <HStack justify="flex-end" mb={3}>
                     <Button
                       size="xs"
-                      colorScheme="purple"
+                      colorScheme="blue"
                       variant="outline"
                       onClick={exportToExcel}
                       isDisabled={trialResults.length === 0}
@@ -2592,7 +2592,7 @@ export default function Home() {
                           <Th rowSpan={2} borderRight="1px" borderColor="gray.200" fontSize="10px" minW="40px" maxW="50px">Len<br/>(Char)</Th>
                           <Th rowSpan={2} borderRight="2px" borderColor="gray.300" fontSize="10px" minW="40px" maxW="50px">Correct</Th>
                           {selectedModels.map((model) => (
-                            <Th key={model.id} colSpan={6} textAlign="center" borderRight="2px" borderColor="gray.400" bg="purple.50" fontSize="xs">
+                            <Th key={model.id} colSpan={6} textAlign="center" borderRight="2px" borderColor="gray.400" bg="blue.50" fontSize="xs">
                               {model.name}
                             </Th>
                           ))}
@@ -2814,7 +2814,7 @@ export default function Home() {
                     <HStack spacing={2}>
                       <Button 
                         size="xs" 
-                        colorScheme="purple" 
+                        colorScheme="blue" 
                         variant="outline"
                         onClick={exportLogs}
                         isDisabled={apiLogs.length === 0}
@@ -2823,7 +2823,7 @@ export default function Home() {
                       </Button>
                       <Button 
                         size="xs" 
-                        colorScheme="purple" 
+                        colorScheme="blue" 
                         variant="outline"
                         onClick={() => setApiLogs([])}
                         isDisabled={apiLogs.length === 0}
@@ -2861,7 +2861,7 @@ export default function Home() {
                                   </Text>
                                 ) : null}
                                 {log.correctAnswer && (
-                                  <Text fontSize="xs" color="purple.600">
+                                  <Text fontSize="xs" color="blue.600">
                                     (Correct: {log.correctAnswer})
                                   </Text>
                                 )}
@@ -2877,7 +2877,7 @@ export default function Home() {
                                 </Text>
                                 <Text 
                                   as="span" 
-                                  color="purple.500"
+                                  color="blue.500"
                                   cursor="pointer"
                                   fontWeight="bold"
                                   fontSize="10px"
@@ -2951,7 +2951,7 @@ export default function Home() {
                                   {log.question && log.question.length > 100 && (
                                     <Text 
                                       as="span" 
-                                      color="purple.500" 
+                                      color="blue.500" 
                                       fontSize="10px"
                                       cursor="pointer"
                                     >
