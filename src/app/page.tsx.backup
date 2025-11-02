@@ -1,27 +1,6 @@
 "use client";
 
 import { useState, useEffect, Fragment, useRef } from "react";
-import { Bar } from 'react-chartjs-2';
-import {
-  Chart as ChartJS,
-  CategoryScale,
-  LinearScale,
-  BarElement,
-  Title,
-  Tooltip,
-  Legend,
-  ChartOptions
-} from 'chart.js';
-
-// Register ChartJS components
-ChartJS.register(
-  CategoryScale,
-  LinearScale,
-  BarElement,
-  Title,
-  Tooltip,
-  Legend
-);
 
 // Simple function to estimate token count (approximately 4 characters per token)
 const estimateTokenCount = (text: string): number => {
@@ -197,8 +176,6 @@ export default function Home() {
   const [activeResultTab, setActiveResultTab] = useState<"results" | "summary" | "logs">("results");
   const [activeSummaryView, setActiveSummaryView] = useState<"table" | "charts">("table");
   const [activeChartType, setActiveChartType] = useState<"bar" | "line" | "comparison">("bar");
-  const [activeClassView, setActiveClassView] = useState<"table" | "charts">("table");
-  const [activeClassChartType, setActiveClassChartType] = useState<"by-class" | "by-class-and-trial">("by-class");
   const [apiLogs, setApiLogs] = useState<Array<{
     timestamp: number;
     model: string;
@@ -1482,7 +1459,7 @@ export default function Home() {
     }
   };
 
-  const exportChartAsImage = (format: 'png' | 'svg' = 'png') => {
+  const exportChartAsImage = () => {
     try {
       const chartElement = document.getElementById('chart-container');
       if (!chartElement) {
@@ -1495,65 +1472,44 @@ export default function Home() {
         return;
       }
 
-      // For Chart.js charts, find the canvas element
-      const canvasElement = chartElement.querySelector('canvas');
-      if (canvasElement) {
-        if (format === 'png') {
-          // Export as PNG
-          canvasElement.toBlob((blob) => {
+      // For SVG charts, we can directly convert to image
+      const svgElement = chartElement.querySelector('svg');
+      if (svgElement) {
+        const svgData = new XMLSerializer().serializeToString(svgElement);
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        const img = new Image();
+        
+        img.onload = () => {
+          canvas.width = svgElement.clientWidth || 800;
+          canvas.height = svgElement.clientHeight || 600;
+          ctx!.fillStyle = 'white';
+          ctx!.fillRect(0, 0, canvas.width, canvas.height);
+          ctx!.drawImage(img, 0, 0);
+          
+          canvas.toBlob((blob) => {
             if (blob) {
               const url = URL.createObjectURL(blob);
               const link = document.createElement('a');
               link.setAttribute('href', url);
               link.setAttribute('download', `chart_${activeChartType}_${new Date().toISOString().slice(0, 10)}.png`);
               link.click();
-              URL.revokeObjectURL(url);
               
               toast({
-                title: "Chart Exported as PNG",
+                title: "Chart Exported Successfully",
                 status: "success",
-                duration: 3000,
-              });
-            } else {
-              toast({
-                title: "Export Failed",
-                description: "Could not create PNG from chart.",
-                status: "error",
                 duration: 3000,
               });
             }
           });
-        } else if (format === 'svg') {
-          // Export as SVG
-          // Get canvas dimensions and data
-          const width = canvasElement.width;
-          const height = canvasElement.height;
-          const dataURL = canvasElement.toDataURL('image/png');
-          
-          // Create SVG with embedded image
-          const svgContent = `<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
-  <image width="${width}" height="${height}" xlink:href="${dataURL}"/>
-</svg>`;
-          
-          const blob = new Blob([svgContent], { type: 'image/svg+xml;charset=utf-8' });
-          const url = URL.createObjectURL(blob);
-          const link = document.createElement('a');
-          link.setAttribute('href', url);
-          link.setAttribute('download', `chart_${activeChartType}_${new Date().toISOString().slice(0, 10)}.svg`);
-          link.click();
-          URL.revokeObjectURL(url);
-          
-          toast({
-            title: "Chart Exported as SVG",
-            status: "success",
-            duration: 3000,
-          });
-        }
+        };
+        
+        img.src = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svgData)));
       } else {
+        // For non-SVG charts, use html2canvas approach or take screenshot
         toast({
-          title: "Export Failed",
-          description: "Chart canvas not found. Please ensure a chart is displayed.",
+          title: "Export Not Supported",
+          description: "This chart type doesn't support image export yet.",
           status: "warning",
           duration: 3000,
         });
@@ -3749,82 +3705,84 @@ export default function Home() {
                 <Box>
                   {/* Title and View Tabs */}
                   <VStack spacing={4} align="stretch">
-                    {/* Title */}
-                    <Text fontSize="lg" fontWeight="bold">Overall Accuracy</Text>
-                    
-                    {/* View Selector Tabs with Chart Type Selector and Export */}
-                    <HStack spacing={2} wrap="wrap" justify="space-between">
-                      <HStack spacing={2}>
-                        <Button
-                          size="xs"
-                          variant={activeSummaryView === "table" ? "solid" : "outline"}
-                          colorScheme="blue"
-                          onClick={() => setActiveSummaryView("table")}
-                        >
-                          Table
-                        </Button>
-                        
-                        {/* Chart Type Selector buttons appear directly after Table */}
-                        {([
-                          { id: 'bar' as const, label: 'Accuracy Per Trial' },
-                          { id: 'comparison' as const, label: 'Overall Accuracy' }
-                        ]).map(chartType => (
-                          <Button
-                            key={chartType.id}
-                            size="xs"
-                            variant={activeSummaryView === "charts" && activeChartType === chartType.id ? "solid" : "outline"}
-                            colorScheme="blue"
-                            onClick={() => {
-                              setActiveSummaryView("charts");
-                              setActiveChartType(chartType.id);
-                            }}
-                          >
-                            {chartType.label}
-                          </Button>
-                        ))}
-                      </HStack>
-                      
-                      {/* Export Button */}
+                    <HStack justify="space-between" align="center">
+                      <Text fontSize="lg" fontWeight="bold">Accuracy</Text>
                       {activeSummaryView === "table" ? (
                         <Button
-                          size="xs"
-                          colorScheme="blue"
+                          size="sm"
                           variant="outline"
+                          colorScheme="blue"
                           onClick={exportTableData}
                           isDisabled={trialResults.length === 0}
                         >
                           Export Table
                         </Button>
                       ) : (
-                        <Menu>
-                          <MenuButton
-                            as={Button}
-                            size="xs"
-                            colorScheme="blue"
-                            variant="outline"
-                            rightIcon={<ChevronDownIcon />}
-                            isDisabled={trialResults.length === 0}
-                          >
-                            Export Chart
-                          </MenuButton>
-                          <MenuList minW="auto" fontSize="sm">
-                            <MenuItem onClick={() => exportChartAsImage('png')} fontSize="sm">
-                              Export as PNG
-                            </MenuItem>
-                            <MenuItem onClick={() => exportChartAsImage('svg')} fontSize="sm">
-                              Export as SVG
-                            </MenuItem>
-                          </MenuList>
-                        </Menu>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          colorScheme="blue"
+                          onClick={exportChartAsImage}
+                          isDisabled={trialResults.length === 0}
+                        >
+                          Export Chart
+                        </Button>
+                      )}
+                    </HStack>
+
+                    {/* View Selector Tabs with Chart Type Selector */}
+                    <HStack spacing={2} wrap="wrap">
+                      <Button
+                        size="sm"
+                        variant={activeSummaryView === "table" ? "solid" : "outline"}
+                        colorScheme="blue"
+                        onClick={() => setActiveSummaryView("table")}
+                        leftIcon={<Text>📊</Text>}
+                      >
+                        Table View
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant={activeSummaryView === "charts" ? "solid" : "outline"}
+                        colorScheme="blue"
+                        onClick={() => setActiveSummaryView("charts")}
+                        leftIcon={<Text>📈</Text>}
+                      >
+                        Charts
+                      </Button>
+                      
+                      {/* Chart Type Selector - Only visible when Charts view is active */}
+                      {activeSummaryView === "charts" && (
+                        <>
+                          <Box borderLeft="1px" borderColor="gray.300" height="30px" mx={2} />
+                          {([
+                            { id: 'bar' as const, label: 'Grouped Bar Chart', icon: '�' },
+                            { id: 'comparison' as const, label: 'Horizontal Comparison', icon: '�' }
+                          ]).map(chartType => (
+                            <Button
+                              key={chartType.id}
+                              size="sm"
+                              variant={activeChartType === chartType.id ? "solid" : "outline"}
+                              colorScheme={activeChartType === chartType.id ? "purple" : "gray"}
+                              onClick={() => setActiveChartType(chartType.id)}
+                              leftIcon={<Text fontSize="xs">{chartType.icon}</Text>}
+                            >
+                              {chartType.label}
+                            </Button>
+                          ))}
+                        </>
                       )}
                     </HStack>
 
                     {/* Combined Table and Charts View */}
                     {activeSummaryView === "table" && (
-                      <VStack spacing={4} align="stretch" w="full">
+                      <HStack spacing={4} align="start">
+                        {/* Left side - Tables */}
+                        <VStack spacing={4} align="stretch" flex="1">
                           {/* Overall Accuracy Table */}
                           {!hasClassColumn ? (
                             <Box borderWidth="1px" borderRadius="md" p={3} bg="white">
+                              <Text fontSize="sm" fontWeight="bold" mb={2}>Overall Accuracy by Model</Text>
                             <Box overflowX="auto">
                               <Table size="sm" variant="simple">
                                 <Thead>
@@ -3887,23 +3845,148 @@ export default function Home() {
                             </Box>
                           </Box>
                         ) : (
-                          /* Overall Accuracy Table (same as non-class version) */
+                          /* Table with Classes as Columns */
+                          (() => {
+                            const classes = Array.from(new Set(trialResults.map(r => r.class).filter(Boolean))).sort();
+                            
+                            return (
+                              <Box borderWidth="1px" borderRadius="md" p={4} bg="white">
+                                <Text fontSize="md" fontWeight="bold" mb={3}>Accuracy by Model and Class</Text>
+                                <Box overflowX="auto">
+                                  <Table size="sm" variant="simple">
+                                    <Thead>
+                                      <Tr>
+                                        <Th rowSpan={2} borderBottom="2px" whiteSpace="nowrap">Model</Th>
+                                        {classes.map(cls => (
+                                          <Th key={cls} colSpan={4} textAlign="center" borderBottom="1px" whiteSpace="nowrap">
+                                            {cls}
+                                          </Th>
+                                        ))}
+                                        <Th rowSpan={2} textAlign="center" borderBottom="2px" borderLeft="2px" whiteSpace="nowrap">
+                                          Overall Avg
+                                        </Th>
+                                      </Tr>
+                                      <Tr>
+                                        {classes.map(cls => (
+                                          <Fragment key={`${cls}-headers`}>
+                                            <Th fontSize="xs" textAlign="center" borderBottom="2px" whiteSpace="nowrap" width="1%">T1</Th>
+                                            <Th fontSize="xs" textAlign="center" borderBottom="2px" whiteSpace="nowrap" width="1%">T2</Th>
+                                            <Th fontSize="xs" textAlign="center" borderBottom="2px" whiteSpace="nowrap" width="1%">T3</Th>
+                                            <Th fontSize="xs" textAlign="center" borderBottom="2px" borderRight="2px" whiteSpace="nowrap" width="1%">Avg</Th>
+                                          </Fragment>
+                                        ))}
+                                      </Tr>
+                                    </Thead>
+                                    <Tbody>
+                                      {selectedModels.map(model => {
+                                        const classAvgs: number[] = [];
+                                        
+                                        return (
+                                          <Tr key={model.id}>
+                                            <Td fontWeight="medium" borderRight="1px" whiteSpace="nowrap">{model.name}</Td>
+                                            {classes.map(className => {
+                                              let trial1Correct = 0, trial2Correct = 0, trial3Correct = 0, total = 0;
+                                              
+                                              trialResults.forEach(qResult => {
+                                                if (qResult.class === className) {
+                                                  const modelResult = qResult.modelResults[model.id];
+                                                  if (modelResult) {
+                                                    total++;
+                                                    if (modelResult.trial1?.correct) trial1Correct++;
+                                                    if (modelResult.trial2?.correct) trial2Correct++;
+                                                    if (modelResult.trial3?.correct) trial3Correct++;
+                                                  }
+                                                }
+                                              });
+                                              
+                                              const t1 = total > 0 ? (trial1Correct / total) * 100 : 0;
+                                              const t2 = total > 0 ? (trial2Correct / total) * 100 : 0;
+                                              const t3 = total > 0 ? (trial3Correct / total) * 100 : 0;
+                                              const avg = (t1 + t2 + t3) / 3;
+                                              
+                                              if (total > 0) classAvgs.push(avg);
+                                              
+                                              return (
+                                                <Fragment key={`${model.id}-${className}`}>
+                                                  <Td fontSize="xs" textAlign="center" whiteSpace="nowrap" width="1%">
+                                                    <Text color={t1 >= 70 ? "green.600" : t1 >= 50 ? "orange.600" : "red.600"}>
+                                                      {total > 0 ? t1.toFixed(1) : '-'}
+                                                    </Text>
+                                                  </Td>
+                                                  <Td fontSize="xs" textAlign="center" whiteSpace="nowrap" width="1%">
+                                                    <Text color={t2 >= 70 ? "green.600" : t2 >= 50 ? "orange.600" : "red.600"}>
+                                                      {total > 0 ? t2.toFixed(1) : '-'}
+                                                    </Text>
+                                                  </Td>
+                                                  <Td fontSize="xs" textAlign="center" whiteSpace="nowrap" width="1%">
+                                                    <Text color={t3 >= 70 ? "green.600" : t3 >= 50 ? "orange.600" : "red.600"}>
+                                                      {total > 0 ? t3.toFixed(1) : '-'}
+                                                    </Text>
+                                                  </Td>
+                                                  <Td fontSize="xs" textAlign="center" fontWeight="bold" borderRight="2px" whiteSpace="nowrap" width="1%">
+                                                    <Text color={avg >= 70 ? "green.600" : avg >= 50 ? "orange.600" : "red.600"}>
+                                                      {total > 0 ? avg.toFixed(1) : '-'}
+                                                    </Text>
+                                                  </Td>
+                                                </Fragment>
+                                              );
+                                            })}
+                                            <Td textAlign="center" fontWeight="bold" borderLeft="2px" bg="gray.50" whiteSpace="nowrap" width="1%">
+                                              {(() => {
+                                                const overallAvg = classAvgs.length > 0 ? classAvgs.reduce((a, b) => a + b, 0) / classAvgs.length : 0;
+                                                return (
+                                                  <Text color={overallAvg >= 70 ? "green.600" : overallAvg >= 50 ? "orange.600" : "red.600"}>
+                                                    {overallAvg > 0 ? overallAvg.toFixed(1) : '-'}
+                                                  </Text>
+                                                );
+                                              })()}
+                                            </Td>
+                                          </Tr>
+                                        );
+                                      })}
+                                    </Tbody>
+                                  </Table>
+                                </Box>
+                              </Box>
+                            );
+                          })()}
+                        </VStack>
+
+                        {/* Right side - Charts */}
+                        <VStack spacing={4} align="stretch" flex="1">
+                          {/* Grouped Bar Chart */}
                           <Box borderWidth="1px" borderRadius="md" p={3} bg="white">
-                          <Box overflowX="auto">
-                            <Table size="sm" variant="simple">
-                              <Thead>
-                                <Tr>
-                                  <Th>Model</Th>
-                                  <Th isNumeric>Trial 1</Th>
-                                  <Th isNumeric>Trial 2</Th>
-                                  <Th isNumeric>Trial 3</Th>
-                                  <Th isNumeric>Average</Th>
-                                </Tr>
-                              </Thead>
-                              <Tbody>
-                                {selectedModels.map(model => {
-                                  let trial1Correct = 0, trial2Correct = 0, trial3Correct = 0;
-                                  let total = 0;
+                            <Text fontSize="sm" fontWeight="bold" mb={3}>Grouped Bar Chart</Text>
+                            <Box h="300px" position="relative">
+                              <svg width="100%" height="100%" viewBox="0 0 700 280" style={{ fontFamily: 'Arial, sans-serif' }}>
+                                {/* Grid lines and Y-axis */}
+                                {[0, 20, 40, 60, 80, 100].map(y => (
+                                  <g key={y}>
+                                    <line
+                                      x1="60"
+                                      y1={240 - (y * 2.2)}
+                                      x2="660"
+                                      y2={240 - (y * 2.2)}
+                                      stroke={y === 0 ? "#000" : "#ddd"}
+                                      strokeWidth={y === 0 ? "1.5" : "0.5"}
+                                      strokeDasharray={y === 0 ? "0" : "2,2"}
+                                    />
+                                    <text
+                                      x="50"
+                                      y={244 - (y * 2.2)}
+                                      fontSize="10"
+                                      fill="#333"
+                                      textAnchor="end"
+                                      fontWeight="500"
+                                    >
+                                      {y}
+                                    </text>
+                                  </g>
+                                ))}
+
+                                {/* Bars for each model */}
+                                {selectedModels.map((model, idx) => {
+                                  let trial1Correct = 0, trial2Correct = 0, trial3Correct = 0, total = 0;
 
                                   trialResults.forEach(qResult => {
                                     const modelResult = qResult.modelResults[model.id];
@@ -3918,40 +4001,93 @@ export default function Home() {
                                   const trial1Acc = total > 0 ? (trial1Correct / total) * 100 : 0;
                                   const trial2Acc = total > 0 ? (trial2Correct / total) * 100 : 0;
                                   const trial3Acc = total > 0 ? (trial3Correct / total) * 100 : 0;
-                                  const avgAcc = (trial1Acc + trial2Acc + trial3Acc) / 3;
+
+                                  const barWidth = 14;
+                                  const groupWidth = barWidth * 3 + 14;
+                                  const totalWidth = 600;
+                                  const spacing = (totalWidth - (groupWidth * selectedModels.length)) / (selectedModels.length + 1);
+                                  const xStart = 60 + spacing + (idx * (groupWidth + spacing));
+
+                                  const colors = {
+                                    trial1: '#2c5aa0',
+                                    trial2: '#5a9e6f',
+                                    trial3: '#b4668f'
+                                  };
 
                                   return (
-                                    <Tr key={model.id}>
-                                      <Td fontWeight="medium">{model.name}</Td>
-                                      <Td isNumeric>
-                                        <Text color={trial1Acc >= 70 ? "green.600" : trial1Acc >= 50 ? "orange.600" : "red.600"}>
-                                          {trial1Acc.toFixed(1)}%
-                                        </Text>
-                                      </Td>
-                                      <Td isNumeric>
-                                        <Text color={trial2Acc >= 70 ? "green.600" : trial2Acc >= 50 ? "orange.600" : "red.600"}>
-                                          {trial2Acc.toFixed(1)}%
-                                        </Text>
-                                      </Td>
-                                      <Td isNumeric>
-                                        <Text color={trial3Acc >= 70 ? "green.600" : trial3Acc >= 50 ? "orange.600" : "red.600"}>
-                                          {trial3Acc.toFixed(1)}%
-                                        </Text>
-                                      </Td>
-                                      <Td isNumeric fontWeight="bold">
-                                        <Text color={avgAcc >= 70 ? "green.600" : avgAcc >= 50 ? "orange.600" : "red.600"}>
-                                          {avgAcc.toFixed(1)}%
-                                        </Text>
-                                      </Td>
-                                    </Tr>
+                                    <g key={model.id}>
+                                      <rect x={xStart} y={240 - (trial1Acc * 2.2)} width={barWidth} height={Math.max(trial1Acc * 2.2, 0)} fill={colors.trial1} stroke="#000" strokeWidth="0.5" />
+                                      {trial1Acc > 5 && <text x={xStart + barWidth / 2} y={236 - (trial1Acc * 2.2)} fontSize="8" fontWeight="600" fill="#000" textAnchor="middle">{trial1Acc.toFixed(0)}</text>}
+                                      <rect x={xStart + barWidth + 5} y={240 - (trial2Acc * 2.2)} width={barWidth} height={Math.max(trial2Acc * 2.2, 0)} fill={colors.trial2} stroke="#000" strokeWidth="0.5" />
+                                      {trial2Acc > 5 && <text x={xStart + barWidth + 5 + barWidth / 2} y={236 - (trial2Acc * 2.2)} fontSize="8" fontWeight="600" fill="#000" textAnchor="middle">{trial2Acc.toFixed(0)}</text>}
+                                      <rect x={xStart + (barWidth + 5) * 2} y={240 - (trial3Acc * 2.2)} width={barWidth} height={Math.max(trial3Acc * 2.2, 0)} fill={colors.trial3} stroke="#000" strokeWidth="0.5" />
+                                      {trial3Acc > 5 && <text x={xStart + (barWidth + 5) * 2 + barWidth / 2} y={236 - (trial3Acc * 2.2)} fontSize="8" fontWeight="600" fill="#000" textAnchor="middle">{trial3Acc.toFixed(0)}</text>}
+                                      <text x={xStart + groupWidth / 2} y="260" fontSize="9" fontWeight="500" fill="#000" textAnchor="middle">
+                                        {model.name.length > 20 ? model.name.substring(0, 17) + '...' : model.name}
+                                      </text>
+                                    </g>
                                   );
                                 })}
-                              </Tbody>
-                            </Table>
+                              </svg>
+                              <HStack spacing={4} justify="center" mt={2}>
+                                <HStack spacing={1}><Box w="12px" h="12px" bg="#2c5aa0" border="1px solid" borderColor="gray.800" /><Text fontSize="xs" fontWeight="500">T1</Text></HStack>
+                                <HStack spacing={1}><Box w="12px" h="12px" bg="#5a9e6f" border="1px solid" borderColor="gray.800" /><Text fontSize="xs" fontWeight="500">T2</Text></HStack>
+                                <HStack spacing={1}><Box w="12px" h="12px" bg="#b4668f" border="1px solid" borderColor="gray.800" /><Text fontSize="xs" fontWeight="500">T3</Text></HStack>
+                              </HStack>
+                            </Box>
                           </Box>
-                        </Box>
-                        )}
+
+                          {/* Horizontal Comparison Chart */}
+                          <Box borderWidth="1px" borderRadius="md" p={3} bg="white">
+                            <Text fontSize="sm" fontWeight="bold" mb={3}>Horizontal Comparison</Text>
+                            <VStack spacing={2} align="stretch">
+                              {selectedModels.map((model) => {
+                                let trial1Correct = 0, trial2Correct = 0, trial3Correct = 0, total = 0;
+
+                                trialResults.forEach(qResult => {
+                                  const modelResult = qResult.modelResults[model.id];
+                                  if (modelResult) {
+                                    total++;
+                                    if (modelResult.trial1?.correct) trial1Correct++;
+                                    if (modelResult.trial2?.correct) trial2Correct++;
+                                    if (modelResult.trial3?.correct) trial3Correct++;
+                                  }
+                                });
+
+                                const avgAcc = total > 0 ? ((trial1Correct + trial2Correct + trial3Correct) / (total * 3)) * 100 : 0;
+
+                                return (
+                                  <Box key={model.id}>
+                                    <HStack spacing={2} mb={1}>
+                                      <Text fontSize="xs" w="140px" fontWeight="600" color="gray.700" noOfLines={1}>
+                                        {model.name}
+                                      </Text>
+                                      <Box flex="1" position="relative" h="28px" bg="gray.100" borderRadius="sm" border="1px solid" borderColor="gray.300">
+                                        <Box
+                                          h="100%"
+                                          bg={avgAcc >= 80 ? "#2c5aa0" : avgAcc >= 60 ? "#5a9e6f" : avgAcc >= 40 ? "#d69e2e" : "#c53030"}
+                                          borderRadius="sm"
+                                          w={`${Math.max(avgAcc, 2)}%`}
+                                          display="flex"
+                                          alignItems="center"
+                                          justifyContent="flex-end"
+                                          pr={2}
+                                          border="1px solid"
+                                          borderColor="gray.800"
+                                        >
+                                          <Text fontSize="xs" fontWeight="bold" color="white">
+                                            {avgAcc.toFixed(1)}%
+                                          </Text>
+                                        </Box>
+                                      </Box>
+                                    </HStack>
+                                  </Box>
+                                );
+                              })}
+                            </VStack>
+                          </Box>
                         </VStack>
+                      </HStack>
                     )}
 
                     {/* Charts View */}
@@ -3962,737 +4098,251 @@ export default function Home() {
                             {/* Vertical Bar Chart - All Models */}
                             {activeChartType === 'bar' && (
                               <Box>
-                                <Box h="480px" position="relative" bg="white" p={4}>
-                                  <Bar
-                                    data={{
-                                      labels: selectedModels.map(model => 
-                                        model.name.length > 25 ? model.name.substring(0, 22) + '...' : model.name
-                                      ),
-                                      datasets: [
-                                        {
-                                          label: 'Trial 1',
-                                          data: selectedModels.map(model => {
-                                            let trial1Correct = 0, total = 0;
-                                            trialResults.forEach(qResult => {
-                                              const modelResult = qResult.modelResults[model.id];
-                                              if (modelResult) {
-                                                total++;
-                                                if (modelResult.trial1?.correct) trial1Correct++;
-                                              }
-                                            });
-                                            return total > 0 ? (trial1Correct / total) * 100 : 0;
-                                          }),
-                                          backgroundColor: '#3b82f6',
-                                          borderColor: '#1e40af',
-                                          borderWidth: 1,
-                                        },
-                                        {
-                                          label: 'Trial 2',
-                                          data: selectedModels.map(model => {
-                                            let trial2Correct = 0, total = 0;
-                                            trialResults.forEach(qResult => {
-                                              const modelResult = qResult.modelResults[model.id];
-                                              if (modelResult) {
-                                                total++;
-                                                if (modelResult.trial2?.correct) trial2Correct++;
-                                              }
-                                            });
-                                            return total > 0 ? (trial2Correct / total) * 100 : 0;
-                                          }),
-                                          backgroundColor: '#10b981',
-                                          borderColor: '#059669',
-                                          borderWidth: 1,
-                                        },
-                                        {
-                                          label: 'Trial 3',
-                                          data: selectedModels.map(model => {
-                                            let trial3Correct = 0, total = 0;
-                                            trialResults.forEach(qResult => {
-                                              const modelResult = qResult.modelResults[model.id];
-                                              if (modelResult) {
-                                                total++;
-                                                if (modelResult.trial3?.correct) trial3Correct++;
-                                              }
-                                            });
-                                            return total > 0 ? (trial3Correct / total) * 100 : 0;
-                                          }),
-                                          backgroundColor: '#f59e0b',
-                                          borderColor: '#d97706',
-                                          borderWidth: 1,
-                                        },
-                                      ],
-                                    }}
-                                    options={{
-                                      responsive: true,
-                                      maintainAspectRatio: false,
-                                      plugins: {
-                                        legend: {
-                                          position: 'bottom' as const,
-                                          labels: {
-                                            font: {
-                                              size: 12,
-                                              weight: 600,
-                                            },
-                                            padding: 15,
-                                          },
-                                        },
-                                        title: {
-                                          display: true,
-                                          text: 'Accuracy Per Trial',
-                                          font: {
-                                            size: 16,
-                                            weight: 'bold',
-                                          },
-                                          padding: {
-                                            bottom: 20,
-                                          },
-                                        },
-                                        tooltip: {
-                                          callbacks: {
-                                            label: function(context) {
-                                              return `${context.dataset.label}: ${context.parsed.y?.toFixed(1) ?? 0}%`;
-                                            }
-                                          }
-                                        }
-                                      },
-                                      scales: {
-                                        y: {
-                                          beginAtZero: true,
-                                          max: 100,
-                                          ticks: {
-                                            callback: function(value) {
-                                              return value + '%';
-                                            },
-                                            font: {
-                                              size: 12,
-                                            },
-                                          },
-                                          grid: {
-                                            color: '#ddd',
-                                          },
-                                        },
-                                        x: {
-                                          ticks: {
-                                            font: {
-                                              size: 11,
-                                              weight: 600,
-                                            },
-                                          },
-                                          grid: {
-                                            display: false,
-                                          },
-                                        },
-                                      },
-                                    }}
-                                  />
-                                </Box>
-                              </Box>
-                            )}
+                                <Text fontSize="sm" fontWeight="bold" mb={3}>Grouped Bar Chart</Text>
+                                <Box h="450px" position="relative"  bg="white">
+                                  <svg width="100%" height="100%" viewBox="0 0 900 450" style={{ fontFamily: 'Arial, sans-serif' }}>
+                                    {/* Grid lines and Y-axis */}
+                                    {[0, 20, 40, 60, 80, 100].map(y => (
+                                      <g key={y}>
+                                        <line
+                                          x1="80"
+                                          y1={380 - (y * 3.2)}
+                                          x2="850"
+                                          y2={380 - (y * 3.2)}
+                                          stroke={y === 0 ? "#000" : "#ddd"}
+                                          strokeWidth={y === 0 ? "2" : "1"}
+                                          strokeDasharray={y === 0 ? "0" : "2,2"}
+                                        />
+                                        <text
+                                          x="70"
+                                          y={385 - (y * 3.2)}
+                                          fontSize="12"
+                                          fill="#333"
+                                          textAnchor="end"
+                                          fontWeight="500"
+                                        >
+                                          {y}
+                                        </text>
+                                      </g>
+                                    ))}
 
-                            {/* Model Comparison Chart - Vertical Bars for Overall Accuracy */}
-                            {activeChartType === 'comparison' && (
-                              <Box>
-                                <Box h="480px" position="relative" bg="white" p={4}>
-                                  <Bar
-                                    data={{
-                                      labels: selectedModels.map(model => 
-                                        model.name.length > 20 ? model.name.substring(0, 17) + '...' : model.name
-                                      ),
-                                      datasets: [
-                                        {
-                                          label: 'Overall Accuracy',
-                                          data: selectedModels.map(model => {
-                                            let trial1Correct = 0, trial2Correct = 0, trial3Correct = 0, total = 0;
-                                            trialResults.forEach(qResult => {
-                                              const modelResult = qResult.modelResults[model.id];
-                                              if (modelResult) {
-                                                total++;
-                                                if (modelResult.trial1?.correct) trial1Correct++;
-                                                if (modelResult.trial2?.correct) trial2Correct++;
-                                                if (modelResult.trial3?.correct) trial3Correct++;
-                                              }
-                                            });
-                                            return total > 0 ? ((trial1Correct + trial2Correct + trial3Correct) / (total * 3)) * 100 : 0;
-                                          }),
-                                          backgroundColor: selectedModels.map((model, idx) => {
-                                            // Generate gradient colors from blue to purple
-                                            const colors = [
-                                              '#3b82f6', // Blue
-                                              '#6366f1', // Indigo
-                                              '#8b5cf6', // Purple
-                                              '#a855f7', // Purple
-                                              '#d946ef', // Fuchsia
-                                              '#ec4899', // Pink
-                                              '#f43f5e', // Rose
-                                              '#ef4444', // Red
-                                              '#f97316', // Orange
-                                              '#f59e0b', // Amber
-                                              '#eab308', // Yellow
-                                              '#84cc16', // Lime
-                                              '#22c55e', // Green
-                                              '#10b981', // Emerald
-                                              '#14b8a6', // Teal
-                                              '#06b6d4', // Cyan
-                                            ];
-                                            return colors[idx % colors.length];
-                                          }),
-                                          borderColor: selectedModels.map((model, idx) => {
-                                            // Generate gradient border colors (darker versions)
-                                            const colors = [
-                                              '#2563eb', // Blue
-                                              '#4f46e5', // Indigo
-                                              '#7c3aed', // Purple
-                                              '#9333ea', // Purple
-                                              '#c026d3', // Fuchsia
-                                              '#db2777', // Pink
-                                              '#e11d48', // Rose
-                                              '#dc2626', // Red
-                                              '#ea580c', // Orange
-                                              '#d97706', // Amber
-                                              '#ca8a04', // Yellow
-                                              '#65a30d', // Lime
-                                              '#16a34a', // Green
-                                              '#059669', // Emerald
-                                              '#0d9488', // Teal
-                                              '#0891b2', // Cyan
-                                            ];
-                                            return colors[idx % colors.length];
-                                          }),
-                                          borderWidth: 2,
-                                          borderRadius: 3,
-                                        },
-                                      ],
-                                    }}
-                                    options={{
-                                      responsive: true,
-                                      maintainAspectRatio: false,
-                                      plugins: {
-                                        legend: {
-                                          display: false,
-                                        },
-                                        title: {
-                                          display: true,
-                                          text: 'Overall Accuracy',
-                                          font: {
-                                            size: 16,
-                                            weight: 'bold',
-                                          },
-                                          padding: {
-                                            bottom: 20,
-                                          },
-                                        },
-                                        tooltip: {
-                                          callbacks: {
-                                            label: function(context) {
-                                              const value = context.parsed.y ?? 0;
-                                              return `Accuracy: ${value.toFixed(1)}%`;
-                                            }
-                                          }
-                                        }
-                                      },
-                                      scales: {
-                                        y: {
-                                          beginAtZero: true,
-                                          max: 100,
-                                          title: {
-                                            display: true,
-                                            text: 'Overall Accuracy (%)',
-                                            font: {
-                                              size: 13,
-                                              weight: 'bold',
-                                            },
-                                          },
-                                          ticks: {
-                                            callback: function(value) {
-                                              return value + '%';
-                                            },
-                                            font: {
-                                              size: 12,
-                                            },
-                                          },
-                                          grid: {
-                                            color: '#ddd',
-                                          },
-                                        },
-                                        x: {
-                                          ticks: {
-                                            font: {
-                                              size: 11,
-                                              weight: 600,
-                                            },
-                                            maxRotation: 15,
-                                            minRotation: 15,
-                                          },
-                                          grid: {
-                                            display: false,
-                                          },
-                                        },
-                                      },
-                                    }}
-                                  />
-                                </Box>
-                              </Box>
-                            )}
-                          </Box>
-                        </VStack>
-                      </Box>
-                    )}
-                  </VStack>
-                </Box>
-              )}
-              
-              {/* Accuracy Per Question Class Section */}
-              {activeResultTab === "summary" && hasClassColumn && (
-                <Box mt={6}>
-                  <VStack spacing={4} align="stretch">
-                    {/* Title */}
-                    <Text fontSize="lg" fontWeight="bold">Accuracy Per Question Class</Text>
-                    
-                    {/* View Selector Tabs with Chart Type Selector and Export */}
-                    <HStack spacing={2} wrap="wrap" justify="space-between">
-                      <HStack spacing={2}>
-                        <Button
-                          size="xs"
-                          variant={activeClassView === "table" ? "solid" : "outline"}
-                          colorScheme="blue"
-                          onClick={() => setActiveClassView("table")}
-                        >
-                          Table
-                        </Button>
-                        
-                        {/* Chart Type Selector buttons appear directly after Table */}
-                        {([
-                          { id: 'by-class' as const, label: 'Accuracy Per Model by Class' },
-                          { id: 'by-class-and-trial' as const, label: 'Average Accuracy by Class and Model' }
-                        ]).map(chartType => (
-                          <Button
-                            key={chartType.id}
-                            size="xs"
-                            variant={activeClassView === "charts" && activeClassChartType === chartType.id ? "solid" : "outline"}
-                            colorScheme="blue"
-                            onClick={() => {
-                              setActiveClassView("charts");
-                              setActiveClassChartType(chartType.id);
-                            }}
-                          >
-                            {chartType.label}
-                          </Button>
-                        ))}
-                      </HStack>
-                      
-                      {/* Export Button */}
-                      {activeClassView === "table" ? (
-                        <Button
-                          size="xs"
-                          colorScheme="blue"
-                          variant="outline"
-                          onClick={exportTableData}
-                          isDisabled={trialResults.length === 0}
-                        >
-                          Export Table
-                        </Button>
-                      ) : (
-                        <Menu>
-                          <MenuButton
-                            as={Button}
-                            size="xs"
-                            colorScheme="blue"
-                            variant="outline"
-                            rightIcon={<ChevronDownIcon />}
-                            isDisabled={trialResults.length === 0}
-                          >
-                            Export Chart
-                          </MenuButton>
-                          <MenuList minW="auto" fontSize="sm">
-                            <MenuItem onClick={() => exportChartAsImage('png')} fontSize="sm">
-                              Export as PNG
-                            </MenuItem>
-                            <MenuItem onClick={() => exportChartAsImage('svg')} fontSize="sm">
-                              Export as SVG
-                            </MenuItem>
-                          </MenuList>
-                        </Menu>
-                      )}
-                    </HStack>
+                                    {/* Bars for each model */}
+                                    {selectedModels.map((model, idx) => {
+                                      let trial1Correct = 0, trial2Correct = 0, trial3Correct = 0, total = 0;
 
-                    {/* Table View */}
-                    {activeClassView === "table" && (
-                      <VStack spacing={4} align="stretch" w="full">
-                        {(() => {
-                          const classes = Array.from(new Set(trialResults.map(r => r.class).filter(Boolean))).sort();
-                          
-                          return (
-                            <Box borderWidth="1px" borderRadius="md" p={4} bg="white">
-                              <Box overflowX="auto">
-                                <Table size="sm" variant="simple">
-                                  <Thead>
-                                    <Tr>
-                                      <Th rowSpan={2} borderBottom="2px" whiteSpace="nowrap">Model</Th>
-                                      {classes.map(cls => (
-                                        <Th key={cls} colSpan={4} textAlign="center" borderBottom="1px" whiteSpace="nowrap">
-                                          {cls}
-                                        </Th>
-                                      ))}
-                                      <Th rowSpan={2} textAlign="center" borderLeft="2px" borderBottom="2px" bg="blue.50" whiteSpace="nowrap">
-                                        Avg
-                                      </Th>
-                                    </Tr>
-                                    <Tr>
-                                      {classes.map(cls => (
-                                        <Fragment key={`${cls}-headers`}>
-                                          <Th fontSize="xs" textAlign="center" borderBottom="2px" whiteSpace="nowrap" width="1%">T1</Th>
-                                          <Th fontSize="xs" textAlign="center" borderBottom="2px" whiteSpace="nowrap" width="1%">T2</Th>
-                                          <Th fontSize="xs" textAlign="center" borderBottom="2px" whiteSpace="nowrap" width="1%">T3</Th>
-                                          <Th fontSize="xs" textAlign="center" borderBottom="2px" borderRight="2px" whiteSpace="nowrap" width="1%">Avg</Th>
-                                        </Fragment>
-                                      ))}
-                                    </Tr>
-                                  </Thead>
-                                  <Tbody>
-                                    {selectedModels.map(model => {
+                                      trialResults.forEach(qResult => {
+                                        const modelResult = qResult.modelResults[model.id];
+                                        if (modelResult) {
+                                          total++;
+                                          if (modelResult.trial1?.correct) trial1Correct++;
+                                          if (modelResult.trial2?.correct) trial2Correct++;
+                                          if (modelResult.trial3?.correct) trial3Correct++;
+                                        }
+                                      });
+
+                                      const trial1Acc = total > 0 ? (trial1Correct / total) * 100 : 0;
+                                      const trial2Acc = total > 0 ? (trial2Correct / total) * 100 : 0;
+                                      const trial3Acc = total > 0 ? (trial3Correct / total) * 100 : 0;
+
+                                      const barWidth = 18;
+                                      const groupWidth = barWidth * 3 + 20;
+                                      const totalWidth = 770;
+                                      const spacing = (totalWidth - (groupWidth * selectedModels.length)) / (selectedModels.length + 1);
+                                      const xStart = 80 + spacing + (idx * (groupWidth + spacing));
+
+                                      // Professional color palette for academic papers
+                                      const colors = {
+                                        trial1: '#2c5aa0',  // Professional blue
+                                        trial2: '#5a9e6f',  // Professional green
+                                        trial3: '#b4668f'   // Professional purple
+                                      };
+
                                       return (
-                                        <Tr key={model.id}>
-                                          <Td fontWeight="medium" borderRight="1px" whiteSpace="nowrap">{model.name}</Td>
-                                          {classes.map(className => {
-                                            let trial1Correct = 0, trial2Correct = 0, trial3Correct = 0, total = 0;
-                                            
-                                            trialResults.forEach(qResult => {
-                                              if (qResult.class === className) {
-                                                const modelResult = qResult.modelResults[model.id];
-                                                if (modelResult) {
-                                                  total++;
-                                                  if (modelResult.trial1?.correct) trial1Correct++;
-                                                  if (modelResult.trial2?.correct) trial2Correct++;
-                                                  if (modelResult.trial3?.correct) trial3Correct++;
-                                                }
-                                              }
-                                            });
-                                            
-                                            const t1 = total > 0 ? (trial1Correct / total) * 100 : 0;
-                                            const t2 = total > 0 ? (trial2Correct / total) * 100 : 0;
-                                            const t3 = total > 0 ? (trial3Correct / total) * 100 : 0;
-                                            const avg = (t1 + t2 + t3) / 3;
-                                            
-                                            return (
-                                              <Fragment key={`${model.id}-${className}`}>
-                                                <Td fontSize="xs" textAlign="center" whiteSpace="nowrap" width="1%">
-                                                  <Text color={t1 >= 70 ? "green.600" : t1 >= 50 ? "orange.600" : "red.600"}>
-                                                    {total > 0 ? t1.toFixed(1) : '-'}
-                                                  </Text>
-                                                </Td>
-                                                <Td fontSize="xs" textAlign="center" whiteSpace="nowrap" width="1%">
-                                                  <Text color={t2 >= 70 ? "green.600" : t2 >= 50 ? "orange.600" : "red.600"}>
-                                                    {total > 0 ? t2.toFixed(1) : '-'}
-                                                  </Text>
-                                                </Td>
-                                                <Td fontSize="xs" textAlign="center" whiteSpace="nowrap" width="1%">
-                                                  <Text color={t3 >= 70 ? "green.600" : t3 >= 50 ? "orange.600" : "red.600"}>
-                                                    {total > 0 ? t3.toFixed(1) : '-'}
-                                                  </Text>
-                                                </Td>
-                                                <Td fontSize="xs" textAlign="center" fontWeight="bold" borderRight="2px" whiteSpace="nowrap" width="1%">
-                                                  <Text color={avg >= 70 ? "green.600" : avg >= 50 ? "orange.600" : "red.600"}>
-                                                    {total > 0 ? avg.toFixed(1) : '-'}
-                                                  </Text>
-                                                </Td>
-                                              </Fragment>
-                                            );
-                                          })}
-                                          
-                                          {/* Avg column for this model */}
-                                          {(() => {
-                                            let totalT1 = 0, totalT2 = 0, totalT3 = 0, grandTotal = 0;
-                                            
-                                            trialResults.forEach(qResult => {
-                                              const modelResult = qResult.modelResults[model.id];
-                                              if (modelResult) {
-                                                grandTotal++;
-                                                if (modelResult.trial1?.correct) totalT1++;
-                                                if (modelResult.trial2?.correct) totalT2++;
-                                                if (modelResult.trial3?.correct) totalT3++;
-                                              }
-                                            });
-                                            
-                                            const t1Pct = grandTotal > 0 ? (totalT1 / grandTotal) * 100 : 0;
-                                            const t2Pct = grandTotal > 0 ? (totalT2 / grandTotal) * 100 : 0;
-                                            const t3Pct = grandTotal > 0 ? (totalT3 / grandTotal) * 100 : 0;
-                                            const avgPct = (t1Pct + t2Pct + t3Pct) / 3;
-                                            
-                                            return (
-                                              <Td textAlign="center" borderLeft="2px" borderRight="2px" bg="blue.50" fontWeight="bold" whiteSpace="nowrap">
-                                                <Text color={avgPct >= 70 ? "green.600" : avgPct >= 50 ? "orange.600" : "red.600"}>
-                                                  {grandTotal > 0 ? avgPct.toFixed(1) : '-'}
-                                                </Text>
-                                              </Td>
-                                            );
-                                          })()}
-                                        </Tr>
+                                        <g key={model.id}>
+                                          {/* Trial 1 Bar */}
+                                          <rect
+                                            x={xStart}
+                                            y={380 - (trial1Acc * 3.2)}
+                                            width={barWidth}
+                                            height={Math.max(trial1Acc * 3.2, 0)}
+                                            fill={colors.trial1}
+                                            stroke="#000"
+                                            strokeWidth="0.5"
+                                          />
+                                          {trial1Acc > 5 && (
+                                            <text
+                                              x={xStart + barWidth / 2}
+                                              y={375 - (trial1Acc * 3.2)}
+                                              fontSize="10"
+                                              fontWeight="600"
+                                              fill="#000"
+                                              textAnchor="middle"
+                                            >
+                                              {trial1Acc.toFixed(1)}
+                                            </text>
+                                          )}
+
+                                          {/* Trial 2 Bar */}
+                                          <rect
+                                            x={xStart + barWidth + 7}
+                                            y={380 - (trial2Acc * 3.2)}
+                                            width={barWidth}
+                                            height={Math.max(trial2Acc * 3.2, 0)}
+                                            fill={colors.trial2}
+                                            stroke="#000"
+                                            strokeWidth="0.5"
+                                          />
+                                          {trial2Acc > 5 && (
+                                            <text
+                                              x={xStart + barWidth + 7 + barWidth / 2}
+                                              y={375 - (trial2Acc * 3.2)}
+                                              fontSize="10"
+                                              fontWeight="600"
+                                              fill="#000"
+                                              textAnchor="middle"
+                                            >
+                                              {trial2Acc.toFixed(1)}
+                                            </text>
+                                          )}
+
+                                          {/* Trial 3 Bar */}
+                                          <rect
+                                            x={xStart + (barWidth + 7) * 2}
+                                            y={380 - (trial3Acc * 3.2)}
+                                            width={barWidth}
+                                            height={Math.max(trial3Acc * 3.2, 0)}
+                                            fill={colors.trial3}
+                                            stroke="#000"
+                                            strokeWidth="0.5"
+                                          />
+                                          {trial3Acc > 5 && (
+                                            <text
+                                              x={xStart + (barWidth + 7) * 2 + barWidth / 2}
+                                              y={375 - (trial3Acc * 3.2)}
+                                              fontSize="10"
+                                              fontWeight="600"
+                                              fill="#000"
+                                              textAnchor="middle"
+                                            >
+                                              {trial3Acc.toFixed(1)}
+                                            </text>
+                                          )}
+
+                                          {/* Model label */}
+                                          <text
+                                            x={xStart + groupWidth / 2}
+                                            y="400"
+                                            fontSize="11"
+                                            fontWeight="500"
+                                            fill="#000"
+                                            textAnchor="middle"
+                                          >
+                                            {model.name.length > 25 ? model.name.substring(0, 22) + '...' : model.name}
+                                          </text>
+                                        </g>
                                       );
                                     })}
-                                  </Tbody>
-                                </Table>
+                                  </svg>
+                                  
+                                  {/* Legend with professional styling */}
+                                  <HStack spacing={6} justify="center" mt={4} pt={3} borderTop="1px" borderColor="gray.200">
+                                    <HStack spacing={2}>
+                                      <Box w="16px" h="16px" bg="#2c5aa0" border="1px solid" borderColor="gray.800" />
+                                      <Text fontSize="sm" fontWeight="500">Trial 1</Text>
+                                    </HStack>
+                                    <HStack spacing={2}>
+                                      <Box w="16px" h="16px" bg="#5a9e6f" border="1px solid" borderColor="gray.800" />
+                                      <Text fontSize="sm" fontWeight="500">Trial 2</Text>
+                                    </HStack>
+                                    <HStack spacing={2}>
+                                      <Box w="16px" h="16px" bg="#b4668f" border="1px solid" borderColor="gray.800" />
+                                      <Text fontSize="sm" fontWeight="500">Trial 3</Text>
+                                    </HStack>
+                                  </HStack>
+                                </Box>
                               </Box>
-                            </Box>
-                          );
-                        })()}
-                      </VStack>
-                    )}
+                            )}
 
-                    {/* Charts View */}
-                    {activeClassView === "charts" && (
-                      <Box borderWidth="1px" borderRadius="md" p={4} bg="white">
-                        <VStack spacing={4} align="stretch">
-                          <Box id="chart-container">
-                            {/* Accuracy Per Model by Class Chart */}
-                            {activeClassChartType === 'by-class' && (() => {
-                              const classes = Array.from(new Set(trialResults.map(r => r.class).filter(Boolean))).sort();
-                              
-                              // Generate gradient colors for classes
-                              const classColors = [
-                                { bg: '#3b82f6', border: '#2563eb' }, // Blue
-                                { bg: '#10b981', border: '#059669' }, // Emerald
-                                { bg: '#f59e0b', border: '#d97706' }, // Amber
-                                { bg: '#8b5cf6', border: '#7c3aed' }, // Purple
-                                { bg: '#ec4899', border: '#db2777' }, // Pink
-                                { bg: '#06b6d4', border: '#0891b2' }, // Cyan
-                                { bg: '#ef4444', border: '#dc2626' }, // Red
-                                { bg: '#84cc16', border: '#65a30d' }, // Lime
-                              ];
-                              
-                              // Create dataset for each class
-                              const datasets = classes.map((cls, idx) => {
-                                const data = selectedModels.map(model => {
-                                  let trial1Correct = 0, trial2Correct = 0, trial3Correct = 0, total = 0;
-                                  
-                                  trialResults.forEach(qResult => {
-                                    if (qResult.class === cls) {
-                                      const modelResult = qResult.modelResults[model.id];
-                                      if (modelResult) {
-                                        total++;
-                                        if (modelResult.trial1?.correct) trial1Correct++;
-                                        if (modelResult.trial2?.correct) trial2Correct++;
-                                        if (modelResult.trial3?.correct) trial3Correct++;
-                                      }
-                                    }
-                                  });
-                                  
-                                  // Average accuracy across all three trials for this model and class
-                                  return total > 0 ? ((trial1Correct + trial2Correct + trial3Correct) / (total * 3)) * 100 : 0;
-                                });
-                                
-                                const color = classColors[idx % classColors.length];
-                                return {
-                                  label: cls,
-                                  data: data,
-                                  backgroundColor: color.bg,
-                                  borderColor: color.border,
-                                  borderWidth: 1,
-                                };
-                              });
-                              
-                              return (
-                                <Box h="480px" position="relative" bg="white" p={4}>
-                                  <Bar
-                                    data={{
-                                      labels: selectedModels.map(model => 
-                                        model.name.length > 25 ? model.name.substring(0, 22) + '...' : model.name
-                                      ),
-                                      datasets: datasets,
-                                    }}
-                                    options={{
-                                      responsive: true,
-                                      maintainAspectRatio: false,
-                                      plugins: {
-                                        title: {
-                                          display: true,
-                                          text: 'Accuracy Per Model by Class',
-                                          font: {
-                                            size: 16,
-                                            weight: 'bold',
-                                          },
-                                        },
-                                        legend: {
-                                          position: 'bottom',
-                                        },
-                                        tooltip: {
-                                          callbacks: {
-                                            label: function(context) {
-                                              const value = context.parsed.y;
-                                              if (value === null) return '';
-                                              return context.dataset.label + ': ' + value.toFixed(1) + '%';
-                                            },
-                                          },
-                                        },
-                                      },
-                                      scales: {
-                                        y: {
-                                          beginAtZero: true,
-                                          max: 100,
-                                          title: {
-                                            display: true,
-                                            text: 'Average Accuracy (%)',
-                                            font: {
-                                              size: 14,
-                                              weight: 'bold',
-                                            },
-                                          },
-                                          ticks: {
-                                            callback: function(value) {
-                                              return value + '%';
-                                            },
-                                            font: {
-                                              size: 12,
-                                            },
-                                          },
-                                          grid: {
-                                            color: '#ddd',
-                                          },
-                                        },
-                                        x: {
-                                          title: {
-                                            display: true,
-                                            text: 'Model',
-                                            font: {
-                                              size: 14,
-                                              weight: 'bold',
-                                            },
-                                          },
-                                          ticks: {
-                                            font: {
-                                              size: 11,
-                                              weight: 600,
-                                            },
-                                          },
-                                          grid: {
-                                            display: false,
-                                          },
-                                        },
-                                      },
-                                    }}
-                                  />
-                                </Box>
-                              );
-                            })()}
+                            {/* Model Comparison Chart - Horizontal Bars */}
+                            {activeChartType === 'comparison' && (
+                              <Box>
+                                <Text fontSize="sm" fontWeight="bold" mb={3}>
+                                  Horizontal Comparison
+                                </Text>
+                                <Box borderWidth="1px" borderRadius="md" p={3} bg="white">
+                                  <VStack spacing={4} align="stretch">
+                                    {selectedModels.map((model) => {
+                                      let trial1Correct = 0, trial2Correct = 0, trial3Correct = 0, total = 0;
 
-                            {/* Accuracy Per Trial and Class Chart */}
-                            {activeClassChartType === 'by-class-and-trial' && (() => {
-                              const classes = Array.from(new Set(trialResults.map(r => r.class).filter(Boolean))).sort();
-                              
-                              // Create dataset for each model
-                              const datasets = selectedModels.map((model, idx) => {
-                                const data = classes.map(cls => {
-                                  let trial1Correct = 0, trial2Correct = 0, trial3Correct = 0, total = 0;
+                                      trialResults.forEach(qResult => {
+                                        const modelResult = qResult.modelResults[model.id];
+                                        if (modelResult) {
+                                          total++;
+                                          if (modelResult.trial1?.correct) trial1Correct++;
+                                          if (modelResult.trial2?.correct) trial2Correct++;
+                                          if (modelResult.trial3?.correct) trial3Correct++;
+                                        }
+                                      });
+
+                                      const avgAcc = total > 0 ? ((trial1Correct + trial2Correct + trial3Correct) / (total * 3)) * 100 : 0;
+
+                                      return (
+                                        <Box key={model.id}>
+                                          <HStack spacing={3} mb={2}>
+                                            <Text fontSize="sm" w="200px" fontWeight="600" color="gray.700">
+                                              {model.name}
+                                            </Text>
+                                            <Box flex="1" position="relative" h="45px" bg="gray.100" borderRadius="md" border="1px solid" borderColor="gray.300">
+                                              <Box
+                                                h="100%"
+                                                bg={avgAcc >= 80 ? "#2c5aa0" : avgAcc >= 60 ? "#5a9e6f" : avgAcc >= 40 ? "#d69e2e" : "#c53030"}
+                                                borderRadius="md"
+                                                w={`${Math.max(avgAcc, 2)}%`}
+                                                transition="width 0.5s"
+                                                display="flex"
+                                                alignItems="center"
+                                                justifyContent="flex-end"
+                                                pr={3}
+                                                position="relative"
+                                                border="1px solid"
+                                                borderColor="gray.800"
+                                              >
+                                                <Text fontSize="sm" fontWeight="bold" color="white" textShadow="0 1px 2px rgba(0,0,0,0.3)">
+                                                  {avgAcc.toFixed(1)}%
+                                                </Text>
+                                              </Box>
+                                              {/* Grid lines overlay */}
+                                              {[20, 40, 60, 80].map(mark => (
+                                                <Box
+                                                  key={mark}
+                                                  position="absolute"
+                                                  left={`${mark}%`}
+                                                  top="0"
+                                                  bottom="0"
+                                                  width="1px"
+                                                  bg="gray.400"
+                                                  opacity="0.3"
+                                                  pointerEvents="none"
+                                                />
+                                              ))}
+                                            </Box>
+                                          </HStack>
+                                        </Box>
+                                      );
+                                    })}
+                                  </VStack>
                                   
-                                  trialResults.forEach(qResult => {
-                                    if (qResult.class === cls) {
-                                      const modelResult = qResult.modelResults[model.id];
-                                      if (modelResult) {
-                                        total++;
-                                        if (modelResult.trial1?.correct) trial1Correct++;
-                                        if (modelResult.trial2?.correct) trial2Correct++;
-                                        if (modelResult.trial3?.correct) trial3Correct++;
-                                      }
-                                    }
-                                  });
-                                  
-                                  const avg = total > 0 ? ((trial1Correct + trial2Correct + trial3Correct) / (total * 3)) * 100 : 0;
-                                  return avg;
-                                });
-                                
-                                // Generate unique color for each model
-                                const colors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'];
-                                const color = colors[idx % colors.length];
-                                
-                                return {
-                                  label: model.name.length > 25 ? model.name.substring(0, 22) + '...' : model.name,
-                                  data: data,
-                                  backgroundColor: color,
-                                  borderColor: color,
-                                  borderWidth: 1,
-                                };
-                              });
-                              
-                              return (
-                                <Box h="480px" position="relative" bg="white" p={4}>
-                                  <Bar
-                                    data={{
-                                      labels: classes,
-                                      datasets: datasets,
-                                    }}
-                                    options={{
-                                      responsive: true,
-                                      maintainAspectRatio: false,
-                                      plugins: {
-                                        title: {
-                                          display: true,
-                                          text: 'Average Accuracy by Class and Model',
-                                          font: {
-                                            size: 16,
-                                            weight: 'bold',
-                                          },
-                                        },
-                                        legend: {
-                                          position: 'bottom',
-                                        },
-                                        tooltip: {
-                                          callbacks: {
-                                            label: function(context) {
-                                              const value = context.parsed.y;
-                                              if (value === null) return '';
-                                              return context.dataset.label + ': ' + value.toFixed(1) + '%';
-                                            },
-                                          },
-                                        },
-                                      },
-                                      scales: {
-                                        y: {
-                                          beginAtZero: true,
-                                          max: 100,
-                                          title: {
-                                            display: true,
-                                            text: 'Average Accuracy (%)',
-                                            font: {
-                                              size: 14,
-                                              weight: 'bold',
-                                            },
-                                          },
-                                          ticks: {
-                                            callback: function(value) {
-                                              return value + '%';
-                                            },
-                                            font: {
-                                              size: 12,
-                                            },
-                                          },
-                                          grid: {
-                                            color: '#ddd',
-                                          },
-                                        },
-                                        x: {
-                                          title: {
-                                            display: true,
-                                            text: 'Question Class',
-                                            font: {
-                                              size: 14,
-                                              weight: 'bold',
-                                            },
-                                          },
-                                          ticks: {
-                                            font: {
-                                              size: 11,
-                                              weight: 600,
-                                            },
-                                          },
-                                          grid: {
-                                            display: false,
-                                          },
-                                        },
-                                      },
-                                    }}
-                                  />
+                                  {/* Scale labels */}
+                                  <HStack spacing={0} justify="space-between" mt={4} px="200px" borderTop="1px" borderColor="gray.200" pt={3}>
+                                    {[0, 20, 40, 60, 80, 100].map(mark => (
+                                      <Text key={mark} fontSize="xs" fontWeight="600" color="gray.600">
+                                        {mark}%
+                                      </Text>
+                                    ))}
+                                  </HStack>
                                 </Box>
-                              );
-                            })()}
+                              </Box>
+                            )}
                           </Box>
                         </VStack>
                       </Box>
