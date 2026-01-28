@@ -1945,13 +1945,19 @@ export default function Home() {
       // Get the correct endpoint based on model type
       const endpoint = getApiEndpoint(storedConfig.baseUrl || "https://api.openai.com/v1", modelId, model.provider);
 
-      const response = await fetch(endpoint, {
+      const response = await fetch('/api/chat', {
         method: "POST",
         headers: { 
           "Content-Type": "application/json",
-          "Authorization": `Bearer ${storedConfig.key}`
         },
-        body: JSON.stringify(requestBody),
+        body: JSON.stringify({
+          endpoint: endpoint,
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${storedConfig.key}`
+          },
+          requestBody: requestBody
+        }),
         signal: abortSignal || AbortSignal.timeout(600000), // 10 minutes for slow reasoning models
       });
 
@@ -2147,13 +2153,20 @@ export default function Home() {
             { role: "system", content: prompt },
             { role: "user", content: combinedQuestion }
           ];
-          requestBody.temperature = temperature;
+          
+          // DeepSeek models support temperature but may have different defaults
+          // Only add temperature for non-DeepSeek models to be safe
+          if (model.provider !== 'deepseek') {
+            requestBody.temperature = temperature;
+          }
         }
         
         // Add reasoning_effort parameter for GPT-5 and O-series models if specified
         if (model.reasoningEffort && model.provider === 'openai') {
           requestBody.reasoning_effort = model.reasoningEffort;
         }
+
+        console.log(`[Request Body] ${JSON.stringify(requestBody).substring(0, 500)}...`);
         
         //max_tokens: 500, // Increased to allow for more verbose responses
         //stop: ["\n\n"],
@@ -2161,15 +2174,51 @@ export default function Home() {
         // Get the correct endpoint based on model type
         const endpoint = getApiEndpoint(storedConfig.baseUrl || "https://api.openai.com/v1", modelId, model.provider);
 
-        const response = await fetch(endpoint, {
-          method: "POST",
-          headers: { 
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${storedConfig.key}`
-          },
-          body: JSON.stringify(requestBody),
-          signal: abortSignal || AbortSignal.timeout(600000), // 10 minutes for slow reasoning models
-        });
+        console.log(`[API Call] Provider: ${model.provider}, Endpoint: ${endpoint}, Model: ${modelId}`);
+
+        let response;
+        try {
+          // Use Next.js API route to avoid CORS issues
+          response = await fetch('/api/chat', {
+            method: "POST",
+            headers: { 
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              endpoint: endpoint,
+              headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${storedConfig.key}`
+              },
+              requestBody: requestBody
+            }),
+            signal: abortSignal || AbortSignal.timeout(600000), // 10 minutes for slow reasoning models
+          });
+        } catch (fetchError) {
+          const fetchErrorMsg = `Fetch error: ${fetchError instanceof Error ? fetchError.message : String(fetchError)}`;
+          console.error(`[API Error] ${fetchErrorMsg}`, fetchError);
+          
+          // Log to API logs
+          setApiLogs(prev => [...prev, {
+            timestamp: Date.now(),
+            provider: model.provider,
+            model: model.name,
+            request: requestBody,
+            error: fetchErrorMsg,
+            duration: Date.now() - startTime,
+            question: `Batch of ${batch.length} questions`,
+            questionId: batch.map(q => q.id).join(', '),
+            temperature: temperature,
+            promptTokens: 0,
+            completionTokens: 0,
+            totalTokens: 0,
+            showFullRequest: false,
+          }]);
+          
+          throw new Error(fetchErrorMsg);
+        }
+
+        console.log(`[API Response] Status: ${response.status} ${response.statusText}`);
 
         if (!response.ok) {
           const errorData = await response.json().catch(() => ({}));
@@ -2573,10 +2622,22 @@ export default function Home() {
           const timeoutId = setTimeout(() => controller.abort(), 180000); // 3 minutes timeout for model fetching
           
           try {
-            const response = await fetch(`${baseUrl}/models`, {
+            const modelsEndpoint = `${baseUrl}/models`;
+            console.log(`[Models Fetch] Provider: ${provider}, Endpoint: ${modelsEndpoint}`);
+            
+            const response = await fetch('/api/chat', {
+              method: 'POST',
               headers: {
-                Authorization: `Bearer ${apiKey}`,
+                'Content-Type': 'application/json',
               },
+              body: JSON.stringify({
+                endpoint: modelsEndpoint,
+                method: 'GET',
+                headers: {
+                  'Authorization': `Bearer ${apiKey}`,
+                  'Content-Type': 'application/json'
+                }
+              }),
               signal: controller.signal
             });
           
@@ -2584,6 +2645,7 @@ export default function Home() {
             // Handle specific error codes with more detailed information
             if (response.status === 401) {
               const errorMessage = `Authentication failed (401) for ${provider}: Invalid or expired API key`;
+              console.error(`[Models Fetch Error] ${errorMessage}`);
               toast({
                 title: `${provider} Authentication Error`,
                 description: `Invalid or expired API key. Please update your ${provider} API key.`,
@@ -2595,16 +2657,27 @@ export default function Home() {
               // Attempt to get more detailed error information
               try {
                 const errorData = await response.text();
+                console.error(`[Models Fetch Error] Status ${response.status}: ${errorData}`);
               } catch {
               }
             }
-            continue; // Skip this provider but continue with others
+            
+            // For non-401 errors, throw to trigger catch block with fallback
+            throw new Error(`API returned status ${response.status}`);
           }
           
           const data = await response.json();
           const providerModels: Model[] = [];
           
-          data.data.forEach((model: any) => {
+          // Handle different response formats from different providers
+          const modelsList = data.data || data.models || data || [];
+          const modelsArray = Array.isArray(modelsList) ? modelsList : [];
+          
+          if (modelsArray.length === 0 && provider === 'deepseek') {
+            throw new Error('No models returned from DeepSeek API');
+          }
+          
+          modelsArray.forEach((model: any) => {
             // Check if model.id already contains the provider name to avoid duplication
             const modelAlreadyHasProvider = model.id.toLowerCase().includes(provider.toLowerCase());
             const baseId = modelAlreadyHasProvider ? `provider-${provider}-${model.id}` : `${provider}-${model.id}`;
@@ -2708,6 +2781,34 @@ export default function Home() {
               description: `Connection to ${provider} API timed out. Please check your network or try again later.`,
               status: "error",
               duration: 5000,
+              isClosable: true,
+            });
+          }
+          
+          // If DeepSeek fails to fetch models, add default models
+          if (provider === 'deepseek') {
+            console.log('DeepSeek API fetch failed, using default models');
+            const deepseekModels = [
+              { id: 'deepseek-chat', name: 'DeepSeek Chat' },
+              { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner' },
+            ];
+            
+            deepseekModels.forEach(model => {
+              newModels.push({
+                id: `deepseek-${model.id}`,
+                name: model.name,
+                provider: 'deepseek',
+                apiModelId: model.id,
+              });
+            });
+            
+            totalModelCount += deepseekModels.length;
+            
+            toast({
+              title: `Using Default DeepSeek Models`,
+              description: `Could not fetch models from API. Using default DeepSeek models instead.`,
+              status: "info",
+              duration: 3000,
               isClosable: true,
             });
           }

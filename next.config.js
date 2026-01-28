@@ -1,10 +1,8 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-  swcMinify: true,
-  experimental: {
-    suppressHydrationWarning: true,
-  },
+  output: 'export',
+  distDir: 'out',
   webpack: (config, { isServer }) => {
     if (!isServer) {
       config.resolve.fallback = {
