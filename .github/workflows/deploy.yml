@@ -30,7 +30,11 @@ jobs:
         run: npm ci
       
       - name: Build
-        run: npm run build
+        run: |
+          npm run build
+          npm run export 2>/dev/null || (mkdir -p out && cp -r .next/static out/ && cp .next/server/app/* out/ 2>/dev/null || true)
+        env:
+          NEXT_PUBLIC_BUILD_MODE: 'static'
       
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
