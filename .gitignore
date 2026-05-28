@@ -37,3 +37,9 @@ coverage/
 
 # Misc
 .DS_Store
+
+# CSV files
+*.csv
+
+# Markdown documentation files
+*.md
