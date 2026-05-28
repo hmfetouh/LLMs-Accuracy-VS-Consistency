@@ -2682,20 +2682,82 @@ export default function Home() {
             const modelAlreadyHasProvider = model.id.toLowerCase().includes(provider.toLowerCase());
             const baseId = modelAlreadyHasProvider ? `provider-${provider}-${model.id}` : `${provider}-${model.id}`;
             
-            // Check if this is a GPT-5 model that supports reasoning_effort
-            // Matches: gpt-5, gpt-5-2025-08-07, etc.
-            const isGPT5BaseModel = /^gpt-5(-\d{4}-\d{2}-\d{2})?$/i.test(model.id);
+            // Check for specific GPT-5.5 model (most specific first)
+            const isGPT55 = /^gpt-5\.5(?:-(pro))?(?:-\d{4}-\d{2}-\d{2})?$/i.test(model.id);
+            const isGPT55Pro = /^gpt-5\.5-pro(?:-\d{4}-\d{2}-\d{2})?$/i.test(model.id);
             
-            // Matches: gpt-5-mini, gpt-5-nano, gpt-5-mini-2025-08-07, gpt-5-nano-2025-08-07, etc.
-            const isGPT5MiniOrNano = /^gpt-5-(mini|nano)(-\d{4}-\d{2}-\d{2})?$/i.test(model.id);
+            // Check for specific GPT-5.4 model
+            const isGPT54 = /^gpt-5\.4(?:-(pro))?(?:-\d{4}-\d{2}-\d{2})?$/i.test(model.id);
+            const isGPT54Pro = /^gpt-5\.4-pro(?:-\d{4}-\d{2}-\d{2})?$/i.test(model.id);
+            
+            // Check for base GPT-5 (not 5.4 or 5.5)
+            const isGPT5Base = /^gpt-5(?:-\d{4}-\d{2}-\d{2})?$/i.test(model.id);
+            
+            // Matches: gpt-5-mini, gpt-5-nano, and all dated versions
+            const isGPT5MiniOrNano = /^gpt-5-(mini|nano)(?:-\d{4}-\d{2}-\d{2})?$/i.test(model.id);
             
             // Check if this is an O-series model that supports reasoning_effort (excluding o1-mini)
             // Matches: o1, o3, o3-mini, o4-mini, o1-2024-12-17, o3-2024-12-17, o3-mini-2024-12-17, etc.
             const isOSeriesWithReasoning = /^(o1|o3|o3-mini|o4-mini)(-\d{4}-\d{2}-\d{2})?$/i.test(model.id);
             
             if (provider === 'openai') {
-              if (isGPT5BaseModel) {
-                // GPT-5 base model has minimal/low/medium/high options
+              if (isGPT55) {
+                // GPT-5.5: none, low, medium (default), high, xhigh
+                const reasoningEfforts = [
+                  { effort: 'none', suffix: ' (No reasoning)' },
+                  { effort: 'low', suffix: ' (Low reasoning)' },
+                  { effort: 'medium', suffix: ' (Medium reasoning - Default)' },
+                  { effort: 'high', suffix: ' (High reasoning)' },
+                  { effort: 'xhigh', suffix: ' (XHigh reasoning)' }
+                ];
+                
+                reasoningEfforts.forEach(({ effort, suffix }) => {
+                  providerModels.push({
+                    id: `${baseId}-${effort}`,
+                    name: `${model.id}${suffix}`,
+                    provider: provider,
+                    apiModelId: model.id,
+                    reasoningEffort: effort
+                  });
+                });
+              } else if (isGPT54Pro) {
+                // GPT-5.4 Pro: medium, high, xhigh
+                const reasoningEfforts = [
+                  { effort: 'medium', suffix: ' (Medium reasoning - Default)' },
+                  { effort: 'high', suffix: ' (High reasoning)' },
+                  { effort: 'xhigh', suffix: ' (XHigh reasoning)' }
+                ];
+                
+                reasoningEfforts.forEach(({ effort, suffix }) => {
+                  providerModels.push({
+                    id: `${baseId}-${effort}`,
+                    name: `${model.id}${suffix}`,
+                    provider: provider,
+                    apiModelId: model.id,
+                    reasoningEffort: effort
+                  });
+                });
+              } else if (isGPT54) {
+                // GPT-5.4: none (default), low, medium, high, xhigh
+                const reasoningEfforts = [
+                  { effort: 'none', suffix: ' (No reasoning - Default)' },
+                  { effort: 'low', suffix: ' (Low reasoning)' },
+                  { effort: 'medium', suffix: ' (Medium reasoning)' },
+                  { effort: 'high', suffix: ' (High reasoning)' },
+                  { effort: 'xhigh', suffix: ' (XHigh reasoning)' }
+                ];
+                
+                reasoningEfforts.forEach(({ effort, suffix }) => {
+                  providerModels.push({
+                    id: `${baseId}-${effort}`,
+                    name: `${model.id}${suffix}`,
+                    provider: provider,
+                    apiModelId: model.id,
+                    reasoningEffort: effort
+                  });
+                });
+              } else if (isGPT5Base) {
+                // GPT-5 base model: minimal, low, medium (default), high
                 const reasoningEfforts = [
                   { effort: 'minimal', suffix: ' (Minimal reasoning)' },
                   { effort: 'low', suffix: ' (Low reasoning)' },
