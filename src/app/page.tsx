@@ -1,12 +1,13 @@
 "use client";
 
 import { useState, useEffect, Fragment, useRef } from "react";
-import { Bar } from 'react-chartjs-2';
+import { Bar, Bubble } from 'react-chartjs-2';
 import {
   Chart as ChartJS,
   CategoryScale,
   LinearScale,
   BarElement,
+  PointElement,
   Title,
   Tooltip,
   Legend,
@@ -18,6 +19,7 @@ ChartJS.register(
   CategoryScale,
   LinearScale,
   BarElement,
+  PointElement,
   Title,
   Tooltip,
   Legend
@@ -199,6 +201,9 @@ export default function Home() {
   const [activeChartType, setActiveChartType] = useState<"bar" | "line" | "comparison">("bar");
   const [activeClassView, setActiveClassView] = useState<"table" | "charts">("table");
   const [activeClassChartType, setActiveClassChartType] = useState<"by-class" | "by-class-and-trial">("by-class");
+  const [activeConsistencyView, setActiveConsistencyView] = useState<"table" | "charts">("table");
+  const [activeConsistencyScoreView, setActiveConsistencyScoreView] = useState<"table" | "charts">("table");
+  const [activeVariableView, setActiveVariableView] = useState<"table" | "charts" | "charts2">("table");
   const [apiLogs, setApiLogs] = useState<Array<{
     timestamp: number;
     model: string;
@@ -911,12 +916,18 @@ export default function Home() {
       
       trialResultsArray.forEach((qResult, index) => {
         Object.entries(qResult.modelResults).forEach(([modelId, modelResult]) => {
+          const getValidAnswer = (trial?: TrialResult): string => {
+            if (!trial || trial.aborted || !trial.answer || trial.answer === 'ERROR') return '';
+            const match = trial.answer.match(/^([A-Za-z])/);
+            return match ? match[1].toUpperCase() : '';
+          };
+
           const answers = [
-            modelResult.trial1?.answer,
-            modelResult.trial2?.answer,
-            modelResult.trial3?.answer
+            getValidAnswer(modelResult.trial1),
+            getValidAnswer(modelResult.trial2),
+            getValidAnswer(modelResult.trial3),
           ].filter(Boolean);
-          
+
           const uniqueAnswers = new Set(answers);
           if (uniqueAnswers.size > 1) {
             modelResult.isInconsistent = true;
@@ -1565,6 +1576,164 @@ export default function Home() {
         status: "error",
         duration: 5000,
       });
+    }
+  };
+
+  const exportChartById = (containerId: string, format: 'png' | 'svg', label: string) => {
+    try {
+      const chartElement = document.getElementById(containerId);
+      if (!chartElement) {
+        toast({ title: "Export Failed", description: "Chart not found.", status: "error", duration: 3000 });
+        return;
+      }
+      const canvasElement = chartElement.querySelector('canvas');
+      if (!canvasElement) {
+        toast({ title: "Export Failed", description: "Chart canvas not found.", status: "warning", duration: 3000 });
+        return;
+      }
+      const date = new Date().toISOString().slice(0, 10);
+      if (format === 'png') {
+        canvasElement.toBlob((blob) => {
+          if (!blob) { toast({ title: "Export Failed", description: "Could not create PNG.", status: "error", duration: 3000 }); return; }
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.setAttribute('href', url);
+          link.setAttribute('download', `${label}_${date}.png`);
+          link.click();
+          URL.revokeObjectURL(url);
+          toast({ title: "Chart Exported as PNG", status: "success", duration: 3000 });
+        });
+      } else {
+        const w = canvasElement.width, h = canvasElement.height;
+        const dataURL = canvasElement.toDataURL('image/png');
+        const svgContent = `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">\n  <image width="${w}" height="${h}" xlink:href="${dataURL}"/>\n</svg>`;
+        const blob = new Blob([svgContent], { type: 'image/svg+xml;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.setAttribute('href', url);
+        link.setAttribute('download', `${label}_${date}.svg`);
+        link.click();
+        URL.revokeObjectURL(url);
+        toast({ title: "Chart Exported as SVG", status: "success", duration: 3000 });
+      }
+    } catch {
+      toast({ title: "Export Failed", description: "An error occurred while exporting.", status: "error", duration: 5000 });
+    }
+  };
+
+  const exportConsistencyTable = () => {
+    if (trialResults.length === 0) {
+      toast({ title: "No Data to Export", description: "Please run an evaluation first.", status: "warning", duration: 3000 });
+      return;
+    }
+    try {
+      let csv = 'Model,Always Correct (%),Always Correct (n),Variable (%),Variable (n),Always Incorrect (%),Always Incorrect (n),Total\n';
+      selectedModels.forEach(model => {
+        let ac = 0, variable = 0, ai = 0, total = 0;
+        trialResults.forEach(qResult => {
+          const mr = qResult.modelResults[model.id];
+          if (!mr?.trial1 || !mr?.trial2 || !mr?.trial3) return;
+          if (mr.trial1.aborted || mr.trial2.aborted || mr.trial3.aborted) return;
+          total++;
+          const c1 = mr.trial1.correct, c2 = mr.trial2.correct, c3 = mr.trial3.correct;
+          if (c1 && c2 && c3) ac++;
+          else if (!c1 && !c2 && !c3) ai++;
+          else variable++;
+        });
+        const f = (n: number) => total > 0 ? ((n / total) * 100).toFixed(1) + '%' : '0.0%';
+        csv += `"${model.name}",${f(ac)},${ac},${f(variable)},${variable},${f(ai)},${ai},${total}\n`;
+      });
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const link = document.createElement('a');
+      link.setAttribute('href', URL.createObjectURL(blob));
+      link.setAttribute('download', `consistency_reliability_${new Date().toISOString().slice(0, 10)}.csv`);
+      link.style.visibility = 'hidden';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      toast({ title: "Table Exported Successfully", status: "success", duration: 3000 });
+    } catch {
+      toast({ title: "Export Failed", description: "An error occurred while exporting.", status: "error", duration: 5000 });
+    }
+  };
+
+  const exportVariableTable = () => {
+    if (trialResults.length === 0) {
+      toast({ title: "No Data to Export", description: "Please run an evaluation first.", status: "warning", duration: 3000 });
+      return;
+    }
+    try {
+      let csv = 'Model,Variable Questions,Avg Correct Rate (%),Interpretation\n';
+      selectedModels.forEach(model => {
+        const correctRates: number[] = [];
+        trialResults.forEach(qResult => {
+          const mr = qResult.modelResults[model.id];
+          if (!mr?.trial1 || !mr?.trial2 || !mr?.trial3) return;
+          if (mr.trial1.aborted || mr.trial2.aborted || mr.trial3.aborted) return;
+          const c1 = mr.trial1.correct, c2 = mr.trial2.correct, c3 = mr.trial3.correct;
+          if ((c1 && c2 && c3) || (!c1 && !c2 && !c3)) return;
+          let correct = (c1 ? 1 : 0) + (c2 ? 1 : 0) + (c3 ? 1 : 0);
+          let total = 3;
+          if (mr.additionalTrials) {
+            mr.additionalTrials.forEach(at => { if (!at.aborted) { correct += at.correct ? 1 : 0; total++; } });
+          }
+          correctRates.push(total > 0 ? (correct / total) * 100 : 0);
+        });
+        const avg = correctRates.length > 0 ? correctRates.reduce((a, b) => a + b, 0) / correctRates.length : null;
+        const interp = avg === null ? '—'
+          : avg >= 70 ? 'Near-correct (rare slip)'
+          : avg >= 40 ? 'Genuinely uncertain'
+          : 'Near-incorrect (rare correct guess)';
+        csv += `"${model.name}",${correctRates.length},${avg !== null ? avg.toFixed(1) + '%' : '—'},"${interp}"\n`;
+      });
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const link = document.createElement('a');
+      link.setAttribute('href', URL.createObjectURL(blob));
+      link.setAttribute('download', `variable_correct_rate_${new Date().toISOString().slice(0, 10)}.csv`);
+      link.style.visibility = 'hidden';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      toast({ title: "Table Exported Successfully", status: "success", duration: 3000 });
+    } catch {
+      toast({ title: "Export Failed", description: "An error occurred while exporting.", status: "error", duration: 5000 });
+    }
+  };
+
+  const exportConsistencyScoreTable = () => {
+    if (trialResults.length === 0) {
+      toast({ title: "No Data to Export", description: "Please run an evaluation first.", status: "warning", duration: 3000 });
+      return;
+    }
+    try {
+      let csv = 'Model,Consistency Score (%),Always Correct (%),Always Correct (n),Always Incorrect (%),Always Incorrect (n),Variable (%),Total\n';
+      selectedModels.forEach(model => {
+        let ac = 0, variable = 0, ai = 0, total = 0;
+        trialResults.forEach(qResult => {
+          const mr = qResult.modelResults[model.id];
+          if (!mr?.trial1 || !mr?.trial2 || !mr?.trial3) return;
+          if (mr.trial1.aborted || mr.trial2.aborted || mr.trial3.aborted) return;
+          total++;
+          const c1 = mr.trial1.correct, c2 = mr.trial2.correct, c3 = mr.trial3.correct;
+          if (c1 && c2 && c3) ac++;
+          else if (!c1 && !c2 && !c3) ai++;
+          else variable++;
+        });
+        const f = (n: number) => total > 0 ? ((n / total) * 100).toFixed(1) + '%' : '0.0%';
+        const score = total > 0 ? (((ac + ai) / total) * 100).toFixed(1) + '%' : '0.0%';
+        csv += `"${model.name}",${score},${f(ac)},${ac},${f(ai)},${ai},${f(variable)},${total}\n`;
+      });
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const link = document.createElement('a');
+      link.setAttribute('href', URL.createObjectURL(blob));
+      link.setAttribute('download', `consistency_score_${new Date().toISOString().slice(0, 10)}.csv`);
+      link.style.visibility = 'hidden';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      toast({ title: "Table Exported Successfully", status: "success", duration: 3000 });
+    } catch {
+      toast({ title: "Export Failed", description: "An error occurred while exporting.", status: "error", duration: 5000 });
     }
   };
 
@@ -3914,7 +4083,10 @@ export default function Home() {
                   <VStack spacing={4} align="stretch">
                     {/* Title */}
                     <Text fontSize="lg" fontWeight="bold">Overall Accuracy</Text>
-                    
+                    <Text fontSize="sm" color="gray.600">
+                      For each model, accuracy is measured as the percentage of questions answered correctly across 3 independent trials — showing not just whether a model knows the answer, but how reliably it performs from one attempt to the next.
+                    </Text>
+
                     {/* View Selector Tabs with Chart Type Selector and Export */}
                     <HStack spacing={2} wrap="wrap" justify="space-between">
                       <HStack spacing={2}>
@@ -4400,10 +4572,46 @@ export default function Home() {
                         </VStack>
                       </Box>
                     )}
+                    {/* Overall Accuracy: dynamic summary */}
+                    {trialResults.length > 0 && (() => {
+                      const modelAccs = selectedModels.map(model => {
+                        let t1c = 0, t2c = 0, t3c = 0, total = 0;
+                        trialResults.forEach(qResult => {
+                          const mr = qResult.modelResults[model.id];
+                          if (!mr) return;
+                          total++;
+                          if (mr.trial1?.correct) t1c++;
+                          if (mr.trial2?.correct) t2c++;
+                          if (mr.trial3?.correct) t3c++;
+                        });
+                        const avg = total > 0 ? ((t1c + t2c + t3c) / (total * 3)) * 100 : 0;
+                        return { model, avg, total };
+                      }).filter(d => d.total > 0);
+                      if (modelAccs.length === 0) return null;
+                      const sorted = [...modelAccs].sort((a, b) => b.avg - a.avg);
+                      const best = sorted[0];
+                      const worst = sorted[sorted.length - 1];
+                      const spread = best.avg - worst.avg;
+                      const above70 = sorted.filter(d => d.avg >= 70).length;
+                      const above50 = sorted.filter(d => d.avg >= 50).length;
+                      let summary = `${best.model.name} led with ${best.avg.toFixed(1)}% average accuracy across all 3 trials`;
+                      if (sorted.length > 1) {
+                        summary += `, while ${worst.model.name} scored the lowest at ${worst.avg.toFixed(1)}% — a spread of ${spread.toFixed(1)} pp`;
+                      }
+                      summary += `. ${above70} of ${sorted.length} model${sorted.length !== 1 ? 's' : ''} scored above 70%`;
+                      if (above70 !== above50) summary += `, ${above50} above 50%`;
+                      summary += '.';
+                      return (
+                        <Box bg="blue.50" borderRadius="md" p={3} borderWidth="1px" borderColor="blue.100">
+                          <Text fontSize="xs" fontWeight="semibold" color="blue.700" mb={1}>Key Insights</Text>
+                          <Text fontSize="xs" color="gray.700">{summary}</Text>
+                        </Box>
+                      );
+                    })()}
                   </VStack>
                 </Box>
               )}
-              
+
               {/* Accuracy Per Question Class Section */}
               {activeResultTab === "summary" && hasClassColumn && (
                 <Box mt={6}>
@@ -4860,10 +5068,909 @@ export default function Home() {
                         </VStack>
                       </Box>
                     )}
+                    {/* Accuracy Per Class: dynamic summary */}
+                    {trialResults.length > 0 && (() => {
+                      const classes = Array.from(new Set(trialResults.map(r => r.class).filter(Boolean))).sort() as string[];
+                      if (classes.length === 0) return null;
+                      // avg accuracy per class across all models and trials
+                      const classAvgs = classes.map(cls => {
+                        let correct = 0, total = 0;
+                        selectedModels.forEach(model => {
+                          trialResults.filter(r => r.class === cls).forEach(qResult => {
+                            const mr = qResult.modelResults[model.id];
+                            if (!mr) return;
+                            if (mr.trial1 && !mr.trial1.aborted) { total++; if (mr.trial1.correct) correct++; }
+                            if (mr.trial2 && !mr.trial2.aborted) { total++; if (mr.trial2.correct) correct++; }
+                            if (mr.trial3 && !mr.trial3.aborted) { total++; if (mr.trial3.correct) correct++; }
+                          });
+                        });
+                        return { cls, avg: total > 0 ? (correct / total) * 100 : 0, total };
+                      }).filter(d => d.total > 0);
+                      if (classAvgs.length === 0) return null;
+                      const sorted = [...classAvgs].sort((a, b) => b.avg - a.avg);
+                      const hardest = sorted[sorted.length - 1];
+                      const easiest = sorted[0];
+                      const spread = easiest.avg - hardest.avg;
+                      let summary = `"${easiest.cls}" was the strongest class (avg ${easiest.avg.toFixed(1)}% correct across all models and trials)`;
+                      if (sorted.length > 1) {
+                        summary += `, while "${hardest.cls}" was the most challenging at ${hardest.avg.toFixed(1)}%`;
+                        if (spread > 10) summary += ` — a ${spread.toFixed(1)} pp gap between easiest and hardest`;
+                      }
+                      summary += '.';
+                      return (
+                        <Box bg="teal.50" borderRadius="md" p={3} borderWidth="1px" borderColor="teal.100">
+                          <Text fontSize="xs" fontWeight="semibold" color="teal.700" mb={1}>Key Insights</Text>
+                          <Text fontSize="xs" color="gray.700">{summary}</Text>
+                        </Box>
+                      );
+                    })()}
                   </VStack>
                 </Box>
               )}
-              
+
+              {/* Consistency and Reliability Section */}
+              {activeResultTab === "summary" && trialResults.length > 0 && (
+                <Box mt={8}>
+                  <VStack spacing={4} align="stretch">
+                    <Text fontSize="lg" fontWeight="bold">Consistency and Reliability</Text>
+                    <Text fontSize="sm" color="gray.600">
+                      For each model, questions are classified by their correctness pattern across all 3 trials: Always Correct (right every time), Always Incorrect (wrong every time with the same answer), and Variable (mixed results). This reveals how much of a model's error profile comes from genuine inconsistency versus systematic wrong answers.
+                    </Text>
+
+                    <HStack spacing={2} wrap="wrap" justify="space-between">
+                      <HStack spacing={2}>
+                        <Button
+                          size="xs"
+                          variant={activeConsistencyView === "table" ? "solid" : "outline"}
+                          colorScheme="blue"
+                          onClick={() => setActiveConsistencyView("table")}
+                        >
+                          Table
+                        </Button>
+                        <Button
+                          size="xs"
+                          variant={activeConsistencyView === "charts" ? "solid" : "outline"}
+                          colorScheme="blue"
+                          onClick={() => setActiveConsistencyView("charts")}
+                        >
+                          Chart
+                        </Button>
+                      </HStack>
+                      {activeConsistencyView === "table" ? (
+                        <Button
+                          size="xs"
+                          colorScheme="blue"
+                          variant="outline"
+                          onClick={exportConsistencyTable}
+                          isDisabled={trialResults.length === 0}
+                        >
+                          Export Table
+                        </Button>
+                      ) : (
+                        <Menu>
+                          <MenuButton
+                            as={Button}
+                            size="xs"
+                            colorScheme="blue"
+                            variant="outline"
+                            rightIcon={<ChevronDownIcon />}
+                            isDisabled={trialResults.length === 0}
+                          >
+                            Export Chart
+                          </MenuButton>
+                          <MenuList minW="auto" fontSize="sm">
+                            <MenuItem onClick={() => exportChartById('consistency-chart-container', 'png', 'consistency_reliability')} fontSize="sm">
+                              Export as PNG
+                            </MenuItem>
+                            <MenuItem onClick={() => exportChartById('consistency-chart-container', 'svg', 'consistency_reliability')} fontSize="sm">
+                              Export as SVG
+                            </MenuItem>
+                          </MenuList>
+                        </Menu>
+                      )}
+                    </HStack>
+
+                    {activeConsistencyView === "table" && (() => {
+                      return (
+                        <Box borderWidth="1px" borderRadius="md" p={3} bg="white">
+                          <Box overflowX="auto">
+                            <Table size="sm" variant="simple">
+                              <Thead>
+                                <Tr>
+                                  <Th>Model</Th>
+                                  <Th isNumeric color="green.600">Always Correct</Th>
+                                  <Th isNumeric color="orange.500">Variable</Th>
+                                  <Th isNumeric color="red.500">Always Incorrect</Th>
+                                  <Th isNumeric>Total</Th>
+                                </Tr>
+                              </Thead>
+                              <Tbody>
+                                {selectedModels.map(model => {
+                                  let alwaysCorrect = 0, alwaysIncorrect = 0, variable = 0, total = 0;
+                                  trialResults.forEach(qResult => {
+                                    const mr = qResult.modelResults[model.id];
+                                    if (!mr?.trial1 || !mr?.trial2 || !mr?.trial3) return;
+                                    if (mr.trial1.aborted || mr.trial2.aborted || mr.trial3.aborted) return;
+                                    total++;
+                                    const c1 = mr.trial1.correct;
+                                    const c2 = mr.trial2.correct;
+                                    const c3 = mr.trial3.correct;
+                                    if (c1 && c2 && c3) alwaysCorrect++;
+                                    else if (!c1 && !c2 && !c3) alwaysIncorrect++;
+                                    else variable++;
+                                  });
+                                  const acPct = total > 0 ? (alwaysCorrect / total) * 100 : 0;
+                                  const vPct  = total > 0 ? (variable / total) * 100 : 0;
+                                  const aiPct = total > 0 ? (alwaysIncorrect / total) * 100 : 0;
+                                  return (
+                                    <Tr key={model.id}>
+                                      <Td fontWeight="medium" fontSize="xs">{model.name}</Td>
+                                      <Td isNumeric>
+                                        <Text color="green.600" fontWeight="bold" fontSize="xs">{acPct.toFixed(1)}%</Text>
+                                        <Text fontSize="xs" color="gray.500">({alwaysCorrect}/{total})</Text>
+                                      </Td>
+                                      <Td isNumeric>
+                                        <Text color="orange.500" fontWeight="bold" fontSize="xs">{vPct.toFixed(1)}%</Text>
+                                        <Text fontSize="xs" color="gray.500">({variable}/{total})</Text>
+                                      </Td>
+                                      <Td isNumeric>
+                                        <Text color="red.500" fontWeight="bold" fontSize="xs">{aiPct.toFixed(1)}%</Text>
+                                        <Text fontSize="xs" color="gray.500">({alwaysIncorrect}/{total})</Text>
+                                      </Td>
+                                      <Td isNumeric fontSize="xs" color="gray.600">{total}</Td>
+                                    </Tr>
+                                  );
+                                })}
+                              </Tbody>
+                            </Table>
+                          </Box>
+                        </Box>
+                      );
+                    })()}
+
+                    {activeConsistencyView === "charts" && (() => {
+                      const consistencyData = selectedModels.map(model => {
+                        let alwaysCorrect = 0, alwaysIncorrect = 0, variable = 0, total = 0;
+                        trialResults.forEach(qResult => {
+                          const mr = qResult.modelResults[model.id];
+                          if (!mr?.trial1 || !mr?.trial2 || !mr?.trial3) return;
+                          if (mr.trial1.aborted || mr.trial2.aborted || mr.trial3.aborted) return;
+                          total++;
+                          const c1 = mr.trial1.correct;
+                          const c2 = mr.trial2.correct;
+                          const c3 = mr.trial3.correct;
+                          if (c1 && c2 && c3) alwaysCorrect++;
+                          else if (!c1 && !c2 && !c3) alwaysIncorrect++;
+                          else variable++;
+                        });
+                        return { alwaysCorrect, variable, alwaysIncorrect, total };
+                      });
+
+                      return (
+                        <Box borderWidth="1px" borderRadius="md" p={4} bg="white">
+                          <Box id="consistency-chart-container" h="480px" position="relative">
+                            <Bar
+                              data={{
+                                labels: selectedModels.map(m =>
+                                  m.name.length > 25 ? m.name.substring(0, 22) + '...' : m.name
+                                ),
+                                datasets: [
+                                  {
+                                    label: 'Always Correct',
+                                    data: consistencyData.map(d =>
+                                      d.total > 0 ? (d.alwaysCorrect / d.total) * 100 : 0
+                                    ),
+                                    backgroundColor: '#22c55e',
+                                    borderColor: '#16a34a',
+                                    borderWidth: 1,
+                                  },
+                                  {
+                                    label: 'Variable',
+                                    data: consistencyData.map(d =>
+                                      d.total > 0 ? (d.variable / d.total) * 100 : 0
+                                    ),
+                                    backgroundColor: '#f59e0b',
+                                    borderColor: '#d97706',
+                                    borderWidth: 1,
+                                  },
+                                  {
+                                    label: 'Always Wrong',
+                                    data: consistencyData.map(d =>
+                                      d.total > 0 ? (d.alwaysIncorrect / d.total) * 100 : 0
+                                    ),
+                                    backgroundColor: '#ef4444',
+                                    borderColor: '#dc2626',
+                                    borderWidth: 1,
+                                  },
+                                ],
+                              }}
+                              options={{
+                                responsive: true,
+                                maintainAspectRatio: false,
+                                plugins: {
+                                  legend: {
+                                    position: 'bottom' as const,
+                                    labels: {
+                                      font: { size: 12, weight: 600 },
+                                      padding: 15,
+                                    },
+                                  },
+                                  title: {
+                                    display: true,
+                                    text: 'Consistency and Reliability',
+                                    font: { size: 16, weight: 'bold' },
+                                    padding: { bottom: 20 },
+                                  },
+                                  tooltip: {
+                                    callbacks: {
+                                      label: function(context) {
+                                        const idx = context.dataIndex;
+                                        const d = consistencyData[idx];
+                                        const count = context.datasetIndex === 0 ? d.alwaysCorrect
+                                          : context.datasetIndex === 1 ? d.variable
+                                          : d.alwaysIncorrect;
+                                        return `${context.dataset.label}: ${(context.parsed.y ?? 0).toFixed(1)}% (${count}/${d.total})`;
+                                      }
+                                    }
+                                  }
+                                },
+                                scales: {
+                                  x: {
+                                    stacked: true,
+                                    ticks: { font: { size: 11, weight: 600 } },
+                                    grid: { display: false },
+                                  },
+                                  y: {
+                                    stacked: true,
+                                    beginAtZero: true,
+                                    max: 100,
+                                    ticks: {
+                                      callback: function(value) { return value + '%'; },
+                                      font: { size: 12 },
+                                    },
+                                    grid: { color: '#ddd' },
+                                  },
+                                },
+                              }}
+                            />
+                          </Box>
+                        </Box>
+                      );
+                    })()}
+
+                    {/* Consistency and Reliability: dynamic summary */}
+                    {(() => {
+                      const stats = selectedModels.map(model => {
+                        let ac = 0, variable = 0, ai = 0, total = 0;
+                        trialResults.forEach(qResult => {
+                          const mr = qResult.modelResults[model.id];
+                          if (!mr?.trial1 || !mr?.trial2 || !mr?.trial3) return;
+                          if (mr.trial1.aborted || mr.trial2.aborted || mr.trial3.aborted) return;
+                          total++;
+                          const c1 = mr.trial1.correct, c2 = mr.trial2.correct, c3 = mr.trial3.correct;
+                          if (c1 && c2 && c3) ac++;
+                          else if (!c1 && !c2 && !c3) ai++;
+                          else variable++;
+                        });
+                        return { model, ac, variable, ai, total,
+                          acPct: total > 0 ? (ac / total) * 100 : 0,
+                          varPct: total > 0 ? (variable / total) * 100 : 0,
+                          aiPct: total > 0 ? (ai / total) * 100 : 0,
+                        };
+                      }).filter(d => d.total > 0);
+                      if (stats.length === 0) return null;
+                      const mostConsistent = [...stats].sort((a, b) => b.acPct - a.acPct)[0];
+                      const mostVariable   = [...stats].sort((a, b) => b.varPct - a.varPct)[0];
+                      const totalErrors    = stats.reduce((s, d) => s + d.variable + d.ai, 0);
+                      const varErrors      = stats.reduce((s, d) => s + d.variable, 0);
+                      const varShare = totalErrors > 0 ? (varErrors / totalErrors) * 100 : 0;
+                      let summary = `${mostConsistent.model.name} was the most consistent model, answering ${mostConsistent.acPct.toFixed(1)}% of questions correctly in all 3 trials`;
+                      if (stats.length > 1) {
+                        summary += `. ${mostVariable.model.name} had the highest variability at ${mostVariable.varPct.toFixed(1)}% variable questions`;
+                      }
+                      summary += `. Across all models, ${varShare.toFixed(0)}% of incorrect responses stem from inconsistency (variable) rather than systematic wrong answers (always incorrect).`;
+                      return (
+                        <Box bg="orange.50" borderRadius="md" p={3} borderWidth="1px" borderColor="orange.100">
+                          <Text fontSize="xs" fontWeight="semibold" color="orange.700" mb={1}>Key Insights</Text>
+                          <Text fontSize="xs" color="gray.700">{summary}</Text>
+                        </Box>
+                      );
+                    })()}
+                  </VStack>
+                </Box>
+              )}
+
+              {/* Consistency Score Section */}
+              {activeResultTab === "summary" && trialResults.length > 0 && (() => {
+                const scoreData = selectedModels.map(model => {
+                  let ac = 0, variable = 0, ai = 0, total = 0;
+                  trialResults.forEach(qResult => {
+                    const mr = qResult.modelResults[model.id];
+                    if (!mr?.trial1 || !mr?.trial2 || !mr?.trial3) return;
+                    if (mr.trial1.aborted || mr.trial2.aborted || mr.trial3.aborted) return;
+                    total++;
+                    const c1 = mr.trial1.correct, c2 = mr.trial2.correct, c3 = mr.trial3.correct;
+                    if (c1 && c2 && c3) ac++;
+                    else if (!c1 && !c2 && !c3) ai++;
+                    else variable++;
+                  });
+                  const acPct      = total > 0 ? (ac / total) * 100 : 0;
+                  const aiPct      = total > 0 ? (ai / total) * 100 : 0;
+                  const varPct     = total > 0 ? (variable / total) * 100 : 0;
+                  const scorePct   = acPct + aiPct;
+                  return { model, ac, ai, variable, total, acPct, aiPct, varPct, scorePct };
+                }).filter(d => d.total > 0);
+
+                if (scoreData.length === 0) return null;
+
+                const sorted     = [...scoreData].sort((a, b) => b.scorePct - a.scorePct);
+                const best       = sorted[0];
+                const worst      = sorted[sorted.length - 1];
+                const spread     = best.scorePct - worst.scorePct;
+                let insightText  = `${best.model.name} has the highest consistency score at ${best.scorePct.toFixed(1)}%`;
+                if (best.aiPct > 0)
+                  insightText += ` (of which ${best.aiPct.toFixed(1)}% are systematic wrong answers)`;
+                if (scoreData.length > 1) {
+                  insightText += `. ${worst.model.name} is the least consistent at ${worst.scorePct.toFixed(1)}%`;
+                  if (spread > 5) insightText += ` — a gap of ${spread.toFixed(1)} pp`;
+                }
+                insightText += '.';
+
+                return (
+                  <Box mt={8}>
+                    <VStack spacing={4} align="stretch">
+                      <Text fontSize="lg" fontWeight="bold">Consistency Score</Text>
+                      <Text fontSize="sm" color="gray.600">
+                        The proportion of questions for which a model's answer did not vary across the 3 trials — calculated as Always Correct + Always Incorrect. A high score means the model commits to the same answer repeatedly, regardless of whether that answer is right or wrong.
+                      </Text>
+
+                      <HStack spacing={2} wrap="wrap" justify="space-between">
+                        <HStack spacing={2}>
+                          <Button
+                            size="xs"
+                            variant={activeConsistencyScoreView === "table" ? "solid" : "outline"}
+                            colorScheme="blue"
+                            onClick={() => setActiveConsistencyScoreView("table")}
+                          >
+                            Table
+                          </Button>
+                          <Button
+                            size="xs"
+                            variant={activeConsistencyScoreView === "charts" ? "solid" : "outline"}
+                            colorScheme="blue"
+                            onClick={() => setActiveConsistencyScoreView("charts")}
+                          >
+                            Chart
+                          </Button>
+                        </HStack>
+                        {activeConsistencyScoreView === "table" ? (
+                          <Button
+                            size="xs"
+                            colorScheme="blue"
+                            variant="outline"
+                            onClick={exportConsistencyScoreTable}
+                            isDisabled={trialResults.length === 0}
+                          >
+                            Export Table
+                          </Button>
+                        ) : (
+                          <Menu>
+                            <MenuButton
+                              as={Button}
+                              size="xs"
+                              colorScheme="blue"
+                              variant="outline"
+                              rightIcon={<ChevronDownIcon />}
+                              isDisabled={trialResults.length === 0}
+                            >
+                              Export Chart
+                            </MenuButton>
+                            <MenuList minW="auto" fontSize="sm">
+                              <MenuItem onClick={() => exportChartById('consistency-score-chart-container', 'png', 'consistency_score')} fontSize="sm">
+                                Export as PNG
+                              </MenuItem>
+                              <MenuItem onClick={() => exportChartById('consistency-score-chart-container', 'svg', 'consistency_score')} fontSize="sm">
+                                Export as SVG
+                              </MenuItem>
+                            </MenuList>
+                          </Menu>
+                        )}
+                      </HStack>
+
+                      {activeConsistencyScoreView === "table" && (
+                        <Box borderWidth="1px" borderRadius="md" p={3} bg="white">
+                          <Box overflowX="auto">
+                            <Table size="sm" variant="simple">
+                              <Thead>
+                                <Tr>
+                                  <Th>Model</Th>
+                                  <Th isNumeric>Consistency Score</Th>
+                                  <Th isNumeric color="blue.600">Same Answer</Th>
+                                  <Th isNumeric color="orange.500">Variable</Th>
+                                  <Th isNumeric>Total</Th>
+                                </Tr>
+                              </Thead>
+                              <Tbody>
+                                {scoreData.map(({ model, ac, ai, variable, total, varPct, scorePct }) => (
+                                  <Tr key={model.id}>
+                                    <Td fontWeight="medium" fontSize="xs">{model.name}</Td>
+                                    <Td isNumeric>
+                                      <Text
+                                        fontWeight="bold"
+                                        fontSize="xs"
+                                        color={scorePct >= 70 ? "blue.600" : scorePct >= 50 ? "blue.400" : "gray.500"}
+                                      >
+                                        {scorePct.toFixed(1)}%
+                                      </Text>
+                                    </Td>
+                                    <Td isNumeric>
+                                      <Text color="blue.600" fontWeight="bold" fontSize="xs">{scorePct.toFixed(1)}%</Text>
+                                      <Text fontSize="xs" color="gray.500">({ac + ai}/{total})</Text>
+                                    </Td>
+                                    <Td isNumeric>
+                                      <Text color="orange.500" fontWeight="bold" fontSize="xs">{varPct.toFixed(1)}%</Text>
+                                      <Text fontSize="xs" color="gray.500">({variable}/{total})</Text>
+                                    </Td>
+                                    <Td isNumeric fontSize="xs" color="gray.600">{total}</Td>
+                                  </Tr>
+                                ))}
+                              </Tbody>
+                            </Table>
+                          </Box>
+                        </Box>
+                      )}
+
+                      {activeConsistencyScoreView === "charts" && (
+                        <Box borderWidth="1px" borderRadius="md" p={4} bg="white">
+                          <Box id="consistency-score-chart-container" h="480px" position="relative">
+                            <Bar
+                              data={{
+                                labels: scoreData.map(d =>
+                                  d.model.name.length > 25 ? d.model.name.substring(0, 22) + '...' : d.model.name
+                                ),
+                                datasets: [
+                                  {
+                                    label: 'Same Answer',
+                                    data: scoreData.map(d => d.scorePct),
+                                    backgroundColor: '#3b82f6',
+                                    borderColor: '#2563eb',
+                                    borderWidth: 1,
+                                  },
+                                  {
+                                    label: 'Variable',
+                                    data: scoreData.map(d => d.varPct),
+                                    backgroundColor: '#f59e0b',
+                                    borderColor: '#d97706',
+                                    borderWidth: 1,
+                                  },
+                                ],
+                              }}
+                              options={{
+                                responsive: true,
+                                maintainAspectRatio: false,
+                                plugins: {
+                                  legend: {
+                                    position: 'bottom' as const,
+                                    labels: { font: { size: 12, weight: 600 }, padding: 15 },
+                                  },
+                                  title: {
+                                    display: true,
+                                    text: 'Consistency Score by Model',
+                                    font: { size: 16, weight: 'bold' },
+                                    padding: { bottom: 20 },
+                                  },
+                                  tooltip: {
+                                    callbacks: {
+                                      label: function(context) {
+                                        const d = scoreData[context.dataIndex];
+                                        const pct = (context.parsed.y ?? 0).toFixed(1);
+                                        const count = context.datasetIndex === 0 ? d.ac + d.ai : d.variable;
+                                        return `${context.dataset.label}: ${pct}% (${count}/${d.total})`;
+                                      },
+                                    },
+                                  },
+                                },
+                                scales: {
+                                  x: {
+                                    stacked: true,
+                                    ticks: { font: { size: 11, weight: 600 } },
+                                    grid: { display: false },
+                                  },
+                                  y: {
+                                    stacked: true,
+                                    beginAtZero: true,
+                                    max: 100,
+                                    ticks: {
+                                      callback: function(value) { return value + '%'; },
+                                      font: { size: 12 },
+                                    },
+                                    grid: { color: '#ddd' },
+                                  },
+                                },
+                              }}
+                            />
+                          </Box>
+                        </Box>
+                      )}
+
+                      <Box bg="blue.50" borderRadius="md" p={3} borderWidth="1px" borderColor="blue.100">
+                        <Text fontSize="xs" fontWeight="semibold" color="blue.700" mb={1}>Key Insights</Text>
+                        <Text fontSize="xs" color="gray.700">{insightText}</Text>
+                      </Box>
+                    </VStack>
+                  </Box>
+                );
+              })()}
+
+              {/* Variable Correct Rate Section */}
+              {activeResultTab === "summary" && trialResults.length > 0 && (() => {
+                const HIST_COLORS = [
+                  '#3b82f6', '#ef4444', '#22c55e', '#f59e0b', '#8b5cf6',
+                  '#06b6d4', '#f97316', '#ec4899', '#14b8a6', '#6366f1',
+                ];
+                const HIST_COLORS_BG = [
+                  '#3b82f680', '#ef444480', '#22c55e80', '#f59e0b80', '#8b5cf680',
+                  '#06b6d480', '#f9731680', '#ec489980', '#14b8a680', '#6366f180',
+                ];
+                const binLabels = [
+                  '0–10%','10–20%','20–30%','30–40%','40–50%',
+                  '50–60%','60–70%','70–80%','80–90%','90–100%',
+                ];
+
+                const modelVariableData = selectedModels.map((model, mi) => {
+                  const correctRates: number[] = [];
+                  trialResults.forEach(qResult => {
+                    const mr = qResult.modelResults[model.id];
+                    if (!mr?.trial1 || !mr?.trial2 || !mr?.trial3) return;
+                    if (mr.trial1.aborted || mr.trial2.aborted || mr.trial3.aborted) return;
+                    const c1 = mr.trial1.correct, c2 = mr.trial2.correct, c3 = mr.trial3.correct;
+                    if ((c1 && c2 && c3) || (!c1 && !c2 && !c3)) return;
+                    let correct = (c1 ? 1 : 0) + (c2 ? 1 : 0) + (c3 ? 1 : 0);
+                    let total = 3;
+                    if (mr.additionalTrials) {
+                      mr.additionalTrials.forEach(at => {
+                        if (!at.aborted) { correct += at.correct ? 1 : 0; total++; }
+                      });
+                    }
+                    correctRates.push(total > 0 ? (correct / total) * 100 : 0);
+                  });
+                  const avg = correctRates.length > 0
+                    ? correctRates.reduce((a, b) => a + b, 0) / correctRates.length
+                    : null;
+                  const bins = Array(10).fill(0);
+                  correctRates.forEach(r => { bins[Math.min(9, Math.floor(r / 10))]++; });
+                  return {
+                    model, correctRates, avg, bins,
+                    color: HIST_COLORS[mi % HIST_COLORS.length],
+                    colorBg: HIST_COLORS_BG[mi % HIST_COLORS_BG.length],
+                  };
+                });
+
+                const hasAny = modelVariableData.some(d => d.correctRates.length > 0);
+                if (!hasAny) return null;
+
+                return (
+                  <Box mt={8}>
+                    <VStack spacing={4} align="stretch">
+                      <Text fontSize="lg" fontWeight="bold">Variable Correct Rate</Text>
+                      <Text fontSize="sm" color="gray.600">
+                        For each model's variable questions (correct in some trials, wrong in others),
+                        this shows how often the model was correct across all trials — revealing whether
+                        "variable" means nearly always right, nearly always wrong, or genuinely uncertain.
+                      </Text>
+
+                      <HStack spacing={2} wrap="wrap" justify="space-between">
+                        <HStack spacing={2}>
+                          <Button
+                            size="xs"
+                            variant={activeVariableView === "table" ? "solid" : "outline"}
+                            colorScheme="blue"
+                            onClick={() => setActiveVariableView("table")}
+                          >
+                            Table
+                          </Button>
+                          <Button
+                            size="xs"
+                            variant={activeVariableView === "charts" ? "solid" : "outline"}
+                            colorScheme="blue"
+                            onClick={() => setActiveVariableView("charts")}
+                          >
+                            Count Distribution
+                          </Button>
+                          <Button
+                            size="xs"
+                            variant={activeVariableView === "charts2" ? "solid" : "outline"}
+                            colorScheme="blue"
+                            onClick={() => setActiveVariableView("charts2")}
+                          >
+                            % Distribution
+                          </Button>
+                        </HStack>
+                        {activeVariableView === "table" ? (
+                          <Button
+                            size="xs"
+                            colorScheme="blue"
+                            variant="outline"
+                            onClick={exportVariableTable}
+                            isDisabled={trialResults.length === 0}
+                          >
+                            Export Table
+                          </Button>
+                        ) : (
+                          <Menu>
+                            <MenuButton
+                              as={Button}
+                              size="xs"
+                              colorScheme="blue"
+                              variant="outline"
+                              rightIcon={<ChevronDownIcon />}
+                              isDisabled={trialResults.length === 0}
+                            >
+                              Export Chart
+                            </MenuButton>
+                            <MenuList minW="auto" fontSize="sm">
+                              <MenuItem onClick={() => exportChartById('variable-chart-container', 'png', 'variable_correct_rate')} fontSize="sm">
+                                Export as PNG
+                              </MenuItem>
+                              <MenuItem onClick={() => exportChartById('variable-chart-container', 'svg', 'variable_correct_rate')} fontSize="sm">
+                                Export as SVG
+                              </MenuItem>
+                            </MenuList>
+                          </Menu>
+                        )}
+                      </HStack>
+
+                      {activeVariableView === "table" && (
+                        <Box borderWidth="1px" borderRadius="md" p={3} bg="white">
+                          <Box overflowX="auto">
+                            <Table size="sm" variant="simple">
+                              <Thead>
+                                <Tr>
+                                  <Th>Model</Th>
+                                  <Th isNumeric>Variable Questions</Th>
+                                  <Th isNumeric>Avg Correct Rate</Th>
+                                  <Th>Interpretation</Th>
+                                </Tr>
+                              </Thead>
+                              <Tbody>
+                                {modelVariableData.map(({ model, correctRates, avg }) => (
+                                  <Tr key={model.id}>
+                                    <Td fontWeight="medium" fontSize="xs">{model.name}</Td>
+                                    <Td isNumeric fontSize="xs">{correctRates.length}</Td>
+                                    <Td isNumeric>
+                                      {avg !== null ? (
+                                        <Text
+                                          fontWeight="bold"
+                                          fontSize="xs"
+                                          color={avg >= 70 ? "green.600" : avg >= 40 ? "orange.500" : "red.500"}
+                                        >
+                                          {avg.toFixed(1)}%
+                                        </Text>
+                                      ) : (
+                                        <Text fontSize="xs" color="gray.400">—</Text>
+                                      )}
+                                    </Td>
+                                    <Td fontSize="xs" color="gray.600">
+                                      {avg !== null
+                                        ? avg >= 70 ? "Near-correct (rare slip)"
+                                          : avg >= 40 ? "Genuinely uncertain"
+                                          : "Near-incorrect (rare correct guess)"
+                                        : "—"}
+                                    </Td>
+                                  </Tr>
+                                ))}
+                              </Tbody>
+                            </Table>
+                          </Box>
+                        </Box>
+                      )}
+
+                      {activeVariableView === "charts" && (
+                        <Box borderWidth="1px" borderRadius="md" p={4} bg="white">
+                          <Box mb={2} px={1}>
+                            <Text fontSize="xs" color="gray.500">
+                              Shows the raw count of variable questions in each correct-rate bucket. Useful when models have similar numbers of variable questions.
+                            </Text>
+                          </Box>
+                          <Box id="variable-chart-container" h="480px" position="relative">
+                            <Bar
+                              data={{
+                                labels: binLabels,
+                                datasets: modelVariableData
+                                  .filter(d => d.correctRates.length > 0)
+                                  .map(({ model, bins, color, colorBg }) => ({
+                                    label: model.name.length > 25 ? model.name.substring(0, 22) + '...' : model.name,
+                                    data: bins,
+                                    backgroundColor: colorBg,
+                                    borderColor: color,
+                                    borderWidth: 1.5,
+                                  })),
+                              }}
+                              options={{
+                                responsive: true,
+                                maintainAspectRatio: false,
+                                plugins: {
+                                  legend: {
+                                    position: 'bottom' as const,
+                                    labels: {
+                                      font: { size: 12, weight: 600 },
+                                      padding: 15,
+                                    },
+                                  },
+                                  title: {
+                                    display: true,
+                                    text: 'Variable Questions: Correct Rate Distribution',
+                                    font: { size: 16, weight: 'bold' },
+                                    padding: { bottom: 20 },
+                                  },
+                                  tooltip: {
+                                    callbacks: {
+                                      label: function(context) {
+                                        const count = Number(context.parsed.y ?? 0);
+                                        const d = modelVariableData.find(x =>
+                                          (x.model.name.length > 25 ? x.model.name.substring(0, 22) + '...' : x.model.name) === context.dataset.label
+                                        );
+                                        const total = d?.correctRates.length ?? 0;
+                                        const pct = total > 0 ? ((count / total) * 100).toFixed(1) : '0.0';
+                                        return `${context.dataset.label}: ${count} question${count !== 1 ? 's' : ''} (${pct}% of variable)`;
+                                      },
+                                    },
+                                  },
+                                },
+                                scales: {
+                                  x: {
+                                    ticks: { font: { size: 11 } },
+                                    grid: { display: false },
+                                    title: {
+                                      display: true,
+                                      text: 'Correct Rate Across All Trials',
+                                      font: { size: 12 },
+                                    },
+                                  },
+                                  y: {
+                                    beginAtZero: true,
+                                    ticks: {
+                                      stepSize: 1,
+                                      callback: function(value) {
+                                        return Number.isInteger(Number(value)) ? value : '';
+                                      },
+                                    },
+                                    grid: { color: '#ddd' },
+                                    title: {
+                                      display: true,
+                                      text: 'Number of Questions',
+                                      font: { size: 12 },
+                                    },
+                                  },
+                                },
+                              }}
+                            />
+                          </Box>
+                        </Box>
+                      )}
+
+                      {activeVariableView === "charts2" && (() => {
+                        // Bubble chart: X = bin center (correct rate), Y = model row, R ∝ % of variable questions
+                        const activeModels = modelVariableData.filter(d => d.correctRates.length > 0);
+                        const binCenters = [5, 15, 25, 35, 45, 55, 65, 75, 85, 95];
+                        const maxR = 28; // max bubble radius in px
+                        const datasets = activeModels.map(({ model, bins, correctRates, color }, mi) => ({
+                          label: model.name.length > 25 ? model.name.substring(0, 22) + '...' : model.name,
+                          data: binCenters.map((cx, bi) => {
+                            const pct = correctRates.length > 0 ? (bins[bi] / correctRates.length) * 100 : 0;
+                            return { x: cx, y: mi, r: pct > 0 ? Math.max(3, Math.sqrt(pct) * (maxR / 10)) : 0 };
+                          }).filter(d => d.r > 0),
+                          backgroundColor: color + '99',
+                          borderColor: color,
+                          borderWidth: 1.5,
+                        }));
+                        const modelLabels = activeModels.map(d =>
+                          d.model.name.length > 22 ? d.model.name.substring(0, 20) + '…' : d.model.name
+                        );
+                        return (
+                          <Box borderWidth="1px" borderRadius="md" p={4} bg="white">
+                            <Box mb={2} px={1}>
+                              <Text fontSize="xs" color="gray.500">
+                                Each bubble represents a correct-rate bucket for one model. Bubble size reflects the percentage of that model's variable questions in that bucket — making models with different variable counts directly comparable.
+                              </Text>
+                            </Box>
+                            <Box id="variable-chart-container" h="480px" position="relative">
+                              <Bubble
+                                data={{ datasets }}
+                                options={{
+                                  responsive: true,
+                                  maintainAspectRatio: false,
+                                  plugins: {
+                                    legend: {
+                                      position: 'bottom' as const,
+                                      labels: { font: { size: 12, weight: 600 }, padding: 15 },
+                                    },
+                                    title: {
+                                      display: true,
+                                      text: 'Variable Questions: Correct Rate Distribution (Bubble)',
+                                      font: { size: 16, weight: 'bold' },
+                                      padding: { bottom: 16 },
+                                    },
+                                    tooltip: {
+                                      callbacks: {
+                                        label: function(context) {
+                                          const d = context.raw as { x: number; y: number; r: number };
+                                          const modelD = activeModels[d.y];
+                                          const binIdx = binCenters.indexOf(d.x);
+                                          const count = binIdx >= 0 ? modelD.bins[binIdx] : 0;
+                                          const total = modelD.correctRates.length;
+                                          const pct = total > 0 ? ((count / total) * 100).toFixed(1) : '0';
+                                          return `${context.dataset.label} | ${d.x - 5}–${d.x + 5}%: ${count} q (${pct}%)`;
+                                        },
+                                      },
+                                    },
+                                  },
+                                  scales: {
+                                    x: {
+                                      min: 0,
+                                      max: 100,
+                                      ticks: {
+                                        stepSize: 10,
+                                        callback: function(value) { return value + '%'; },
+                                        font: { size: 11 },
+                                      },
+                                      grid: { color: '#eee' },
+                                      title: { display: true, text: 'Correct Rate Across All Trials', font: { size: 12 } },
+                                    },
+                                    y: {
+                                      min: -0.5,
+                                      max: activeModels.length - 0.5,
+                                      ticks: {
+                                        stepSize: 1,
+                                        callback: function(value) {
+                                          const i = Number(value);
+                                          return modelLabels[i] ?? '';
+                                        },
+                                        font: { size: 11 },
+                                      },
+                                      grid: { color: '#eee' },
+                                    },
+                                  },
+                                }}
+                              />
+                            </Box>
+                          </Box>
+                        );
+                      })()}
+
+                      {/* Variable Correct Rate: dynamic summary */}
+                      {(() => {
+                        const ranked = [...modelVariableData]
+                          .filter(d => d.avg !== null && d.correctRates.length > 0)
+                          .sort((a, b) => (b.avg ?? 0) - (a.avg ?? 0));
+                        if (ranked.length === 0) return null;
+                        const topModel = ranked[0];
+                        const bottomModel = ranked[ranked.length - 1];
+                        const nearCorrect  = ranked.filter(d => (d.avg ?? 0) >= 70);
+                        const uncertain    = ranked.filter(d => (d.avg ?? 0) >= 40 && (d.avg ?? 0) < 70);
+                        const nearIncorrect = ranked.filter(d => (d.avg ?? 0) < 40);
+                        const parts: string[] = [];
+                        if (nearCorrect.length > 0)
+                          parts.push(`${nearCorrect.map(d => d.model.name).join(', ')} ${nearCorrect.length === 1 ? 'shows' : 'show'} near-correct variability (avg ≥ 70%) — mostly right with rare slips`);
+                        if (uncertain.length > 0)
+                          parts.push(`${uncertain.map(d => d.model.name).join(', ')} ${uncertain.length === 1 ? 'falls' : 'fall'} in the genuinely uncertain range (40–70%)`);
+                        if (nearIncorrect.length > 0)
+                          parts.push(`${nearIncorrect.map(d => d.model.name).join(', ')} ${nearIncorrect.length === 1 ? 'clusters' : 'cluster'} near-incorrect (avg < 40%) — mostly wrong with rare lucky guesses`);
+                        const spread = ranked.length > 1
+                          ? ` The gap between ${topModel.model.name} (${(topModel.avg ?? 0).toFixed(1)}%) and ${bottomModel.model.name} (${(bottomModel.avg ?? 0).toFixed(1)}%) is ${((topModel.avg ?? 0) - (bottomModel.avg ?? 0)).toFixed(1)} pp.`
+                          : '';
+                        return (
+                          <Box bg="purple.50" borderRadius="md" p={3} borderWidth="1px" borderColor="purple.100">
+                            <Text fontSize="xs" fontWeight="semibold" color="purple.700" mb={1}>Key Insights</Text>
+                            <Text fontSize="xs" color="gray.700">{parts.join('; ')}.{spread}</Text>
+                          </Box>
+                        );
+                      })()}
+                    </VStack>
+                  </Box>
+                );
+              })()}
+
               {/* API Logs Tab Content */}
               {activeResultTab === "logs" && (
                 <Box>
