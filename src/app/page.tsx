@@ -63,7 +63,7 @@ import {
   MenuItem,
 } from "@chakra-ui/react";
 
-type Provider = "openai" | "deepseek" | "openwebui";
+type Provider = "openai" | "deepseek" | "claude" | "ollama" | "openwebui";
 
 interface Model {
   id: string;
@@ -227,11 +227,13 @@ export default function Home() {
     totalTokens?: number;
     showFullRequest?: boolean;
   }>>([]);
-  const [currentProvider, setCurrentProvider] = useState<"openai" | "deepseek" | "openwebui">("openai");
+  const [currentProvider, setCurrentProvider] = useState<Provider>("openai");
   const [apiConfigs, setApiConfigs] = useState<Record<string, ApiConfig>>({
     openai: { key: "", baseUrl: "https://api.openai.com/v1" },
     deepseek: { key: "", baseUrl: "https://api.deepseek.com/v1" },
-    openwebui: { key: "", baseUrl: "http://localhost:3001/v1" },
+    claude: { key: "", baseUrl: "https://api.anthropic.com/v1" },
+    ollama: { key: "", baseUrl: "http://localhost:11434/v1" },
+    openwebui: { key: "", baseUrl: "http://localhost:8000/api" },
   });
   
   // State for storing API configurations
@@ -339,10 +341,14 @@ export default function Home() {
         return "https://api.openai.com/v1";
       case "deepseek":
         return "https://api.deepseek.com/v1";
+      case "claude":
+        return "https://api.anthropic.com/v1";
+      case "ollama":
+        return "http://localhost:11434/v1";
       case "openwebui":
-        return "http://localhost:3001/v1";
+        return "http://localhost:8000/api";
       default:
-        return "https://api.openai.com/v1"; // Default fallback
+        return "https://api.openai.com/v1";
     }
   };
 
@@ -363,7 +369,7 @@ export default function Home() {
   // Add API configuration, replace existing from same provider, and load models
   const addApiConfig = async () => {
     const key = getApiKey();
-    if (!key) {
+    if (!key && currentProvider !== 'ollama') {
       toast({
         title: "API Key Required",
         description: "Please enter an API key",
@@ -372,46 +378,37 @@ export default function Home() {
       });
       return;
     }
-    
+
     const baseUrl = getBaseUrl() || getDefaultBaseUrl();
     // Generate a stable ID using timestamp + random digits
     const id = Date.now().toString() + '-' + (Math.floor(Math.random() * 1000)).toString().padStart(3, '0');
-    const maskedKey = key.substring(0, 6) + "..." + key.substring(key.length - 6);
+    const maskedKey = key ? key.substring(0, 6) + "..." + key.substring(key.length - 6) : '(no key)';
     
     const newConfig: StoredApiConfig = {
       id,
       provider: currentProvider,
-      key,
+      key: key || '',
       maskedKey,
       baseUrl
     };
-    
-    // Remove any existing config with the same provider
-    const filteredConfigs = storedApiConfigs.filter(config => config.provider !== currentProvider);
-    const updatedConfigs = [...filteredConfigs, newConfig];
-    setStoredApiConfigs(updatedConfigs);
-    
-    // Save to localStorage
-    localStorage.setItem('storedApiConfigs', JSON.stringify(updatedConfigs));
-    
-    try {
-      // Automatically verify the API key and load models
-      await verifyApiKey(id);
-      
+
+    // Verify first — only save if models are successfully loaded
+    const modelsLoaded = await verifyApiKey(id, newConfig);
+
+    if (modelsLoaded > 0) {
+      const filteredConfigs = storedApiConfigs.filter(config => config.provider !== currentProvider);
+      const updatedConfigs = [...filteredConfigs, newConfig];
+      setStoredApiConfigs(updatedConfigs);
+      localStorage.setItem('storedApiConfigs', JSON.stringify(updatedConfigs));
+
       toast({
         title: "API Configuration Saved",
-        description: `${currentProvider} API models loaded`,
+        description: `${modelsLoaded} models loaded from ${currentProvider}`,
         status: "success",
         duration: 3000,
       });
-    } catch (error) {
-      toast({
-        title: "API Configuration Saved",
-        description: "Configuration saved but couldn't load models. Try again.",
-        status: "warning",
-        duration: 3000,
-      });
     }
+    // If 0 models loaded, the error toast was already shown by verifyApiKey — don't save
   };
   
   // Remove an API configuration and its models
@@ -437,9 +434,11 @@ export default function Home() {
     
     toast({
       title: "API Configuration Removed",
-      description: `${configToRemove.provider === 'openai' ? 'OpenAI' : 
-                     configToRemove.provider === 'deepseek' ? 'DeepSeek' : 
-                     configToRemove.provider === 'openwebui' ? 'Open WebUI' : 
+      description: `${configToRemove.provider === 'openai' ? 'OpenAI' :
+                     configToRemove.provider === 'deepseek' ? 'DeepSeek' :
+                     configToRemove.provider === 'claude' ? 'Claude' :
+                     configToRemove.provider === 'ollama' ? 'Ollama' :
+                     configToRemove.provider === 'openwebui' ? 'Open WebUI' :
                      configToRemove.provider} configuration and models removed`,
       status: "info",
       duration: 3000,
@@ -468,6 +467,8 @@ export default function Home() {
       `provider-${provider}-`,
       'openai-',
       'deepseek-',
+      'claude-',
+      'ollama-',
       'openwebui-'
     ];
     
@@ -510,9 +511,12 @@ export default function Home() {
     const providersWithIssues = new Set<string>();
     
     for (const model of selectedModels) {
+      // Ollama doesn't require an API key
+      if (model.provider === 'ollama') continue;
+
       // Get active API key for this model's provider
       const activeKey = getActiveApiKeyForProvider(model.provider as Provider);
-      
+
       // If no active key found
       if (!activeKey || activeKey.trim().length === 0) {
         invalidModels.push({
@@ -890,191 +894,138 @@ export default function Home() {
           }
         }
 
+        // After trial3: detect inconsistencies for THIS model and run extended trials.
+        // Runs on a fresh pass (currentPhase === 'trial3') or when resuming mid-extended-trials
+        // for this specific model (currentPhase === 'inconsistent' && modelIdx === currentModelIndex).
+        if (currentPhase === 'trial3' || (currentPhase === 'inconsistent' && modelIdx === currentModelIndex)) {
+          const isResumingInconsistent = currentPhase === 'inconsistent';
+          const modelInconsistentQuestions: Array<{index: number, question: {id: string, question: string, answer: string}}> = [];
+
+          if (isResumingInconsistent) {
+            // Resuming mid-extended-trials: restore the already-detected questions from state
+            inconsistentQuestions
+              .filter(iq => iq.modelId === model.id)
+              .forEach(iq => modelInconsistentQuestions.push({ index: iq.index, question: parsedQuestions[iq.index] }));
+          } else {
+            // Fresh detection: scan only this model's results
+            const getValidAnswer = (trial?: TrialResult): string => {
+              if (!trial || trial.aborted || !trial.answer || trial.answer === 'ERROR') return '';
+              const match = trial.answer.match(/^([A-Za-z])/);
+              return match ? match[1].toUpperCase() : '';
+            };
+            trialResultsArray.forEach((qResult, index) => {
+              const modelResult = qResult.modelResults[model.id];
+              if (!modelResult?.trial1 || !modelResult?.trial2 || !modelResult?.trial3) return;
+              const answers = [
+                getValidAnswer(modelResult.trial1),
+                getValidAnswer(modelResult.trial2),
+                getValidAnswer(modelResult.trial3),
+              ].filter(Boolean);
+              if (new Set(answers).size > 1) {
+                modelResult.isInconsistent = true;
+                modelInconsistentQuestions.push({ index, question: parsedQuestions[index] });
+                inconsistentQuestions.push({ index, modelId: model.id });
+              }
+            });
+
+            if (modelInconsistentQuestions.length > 0) {
+              // Update progress total to account for 7 more batched rounds
+              const additionalBatches = Math.ceil(modelInconsistentQuestions.length / 10) * 7;
+              setProgress(prev => ({ ...prev, total: prev.total + additionalBatches }));
+            }
+          }
+
+          if (modelInconsistentQuestions.length > 0) {
+            const startTrial = isResumingInconsistent ? currentTrialNumber : 4;
+
+            for (let trialNum = startTrial; trialNum <= 10; trialNum++) {
+              if (shouldStopRef.current) { wasStopped = true; break; }
+
+              if (shouldPauseRef.current) {
+                setIsPaused(true);
+                setIsEvaluating(false);
+                setIsProcessing(false);
+                setShouldPauseEvaluation(false);
+                shouldPauseRef.current = false;
+                setEvaluationState({
+                  parsedQuestions,
+                  trialResultsArray,
+                  currentModelIndex: modelIdx,
+                  currentPhase: 'inconsistent',
+                  currentQuestionIndex: 0,
+                  currentTrialNumber: trialNum,
+                  inconsistentQuestions: modelInconsistentQuestions.map(q => ({ index: q.index, modelId: model.id }))
+                });
+                toast({ title: "Evaluation Paused", description: "You can resume from where you left off.", status: "info", duration: 3000 });
+                return;
+              }
+
+              try {
+                const trialResults = await runBatchedTrial(
+                  model,
+                  modelInconsistentQuestions.map(q => q.question),
+                  systemPrompt,
+                  trialNum,
+                  controller.signal
+                );
+                trialResults.forEach((result, idx) => {
+                  const questionIndex = modelInconsistentQuestions[idx].index;
+                  if (!trialResultsArray[questionIndex].modelResults[model.id].additionalTrials) {
+                    trialResultsArray[questionIndex].modelResults[model.id].additionalTrials = [];
+                  }
+                  trialResultsArray[questionIndex].modelResults[model.id].additionalTrials!.push(result);
+                });
+                setProgress(prev => ({ ...prev, current: prev.current + 1 }));
+                setTrialResults([...trialResultsArray]);
+              } catch (error) {
+                setIsPaused(true);
+                setIsEvaluating(false);
+                setIsProcessing(false);
+                setShouldPauseEvaluation(false);
+                shouldPauseRef.current = false;
+                setEvaluationState({
+                  parsedQuestions,
+                  trialResultsArray,
+                  currentModelIndex: modelIdx,
+                  currentPhase: 'inconsistent',
+                  currentQuestionIndex: 0,
+                  currentTrialNumber: trialNum,
+                  inconsistentQuestions: modelInconsistentQuestions.map(q => ({ index: q.index, modelId: model.id }))
+                });
+                toast({
+                  title: "API Error - Evaluation Paused",
+                  description: `Error encountered: ${error instanceof Error ? error.message : 'Unknown error'}. Click Resume to retry.`,
+                  status: "error", duration: 10000, isClosable: true,
+                });
+                return;
+              }
+            }
+
+            if (!shouldStopRef.current) {
+              // Calculate correctPercentage across all 10 trials for this model's variable questions
+              for (const { index } of modelInconsistentQuestions) {
+                const modelResult = trialResultsArray[index].modelResults[model.id];
+                const allTrials = [
+                  modelResult.trial1,
+                  modelResult.trial2,
+                  modelResult.trial3,
+                  ...(modelResult.additionalTrials || [])
+                ].filter(Boolean) as TrialResult[];
+                if (allTrials.length > 0) {
+                  const correctCount = allTrials.filter(t => !t.aborted && t.correct).length;
+                  modelResult.correctPercentage = (correctCount / allTrials.length) * 100;
+                }
+              }
+              setTrialResults([...trialResultsArray]);
+            }
+          }
+        }
+
         // Reset phase for next model
         if (modelIdx < selectedModels.length - 1) {
           currentPhase = 'trial1';
           currentQuestionIndex = 0;
         }
-      }
-
-      // Check if user stopped evaluation before Phase 2
-      if (shouldStopRef.current) {
-        wasStopped = true;
-        setIsEvaluating(false);
-        setIsProcessing(false);
-        setShouldStopEvaluation(false);
-        shouldStopRef.current = false;
-        setIsPaused(false);
-        setEvaluationState(null);
-        setAbortController(null);
-        toast({
-          title: "Evaluation Stopped",
-          description: "Evaluation was stopped. Partial results are available.",
-          status: "info",
-          duration: 3000,
-        });
-        return;
-      }
-
-      // Phase 2: Check for inconsistencies and run additional trials
-      inconsistentQuestions = [];
-      
-      trialResultsArray.forEach((qResult, index) => {
-        Object.entries(qResult.modelResults).forEach(([modelId, modelResult]) => {
-          const getValidAnswer = (trial?: TrialResult): string => {
-            if (!trial || trial.aborted || !trial.answer || trial.answer === 'ERROR') return '';
-            const match = trial.answer.match(/^([A-Za-z])/);
-            return match ? match[1].toUpperCase() : '';
-          };
-
-          const answers = [
-            getValidAnswer(modelResult.trial1),
-            getValidAnswer(modelResult.trial2),
-            getValidAnswer(modelResult.trial3),
-          ].filter(Boolean);
-
-          const uniqueAnswers = new Set(answers);
-          if (uniqueAnswers.size > 1) {
-            modelResult.isInconsistent = true;
-            inconsistentQuestions.push({ index, modelId });
-          }
-        });
-      });
-
-      // Phase 3: Run 7 additional trials for inconsistent questions (BATCHED)
-      if (inconsistentQuestions.length > 0) {
-        // Group inconsistent questions by model for batching
-        const inconsistentByModel = new Map<string, Array<{index: number, question: {id: string, question: string, answer: string}}>>();
-        
-        for (const {index, modelId} of inconsistentQuestions) {
-          if (!inconsistentByModel.has(modelId)) {
-            inconsistentByModel.set(modelId, []);
-          }
-          inconsistentByModel.get(modelId)!.push({
-            index,
-            question: parsedQuestions[index]
-          });
-        }
-        
-        // Update progress to account for 7 batched trials per model (not per question)
-        const totalAdditionalTrials = Array.from(inconsistentByModel.values())
-          .reduce((sum, questions) => sum + (Math.ceil(questions.length / 10) * 7), 0);
-        setProgress(prev => ({ ...prev, total: prev.total + totalAdditionalTrials }));
-        
-        // Run 7 additional trials for each model's inconsistent questions
-        for (const [modelId, modelInconsistentQuestions] of Array.from(inconsistentByModel.entries())) {
-          const model = selectedModels.find(m => m.id === modelId);
-          if (!model) continue;
-          
-          // Run trials 4-10 (7 trials)
-          for (let trialNum = 4; trialNum <= 10; trialNum++) {
-            // Check for stop
-            if (shouldStopRef.current) {
-              wasStopped = true;
-              break;
-            }
-
-            // Check for pause
-            if (shouldPauseRef.current) {
-              setIsPaused(true);
-              setIsEvaluating(false);
-              setIsProcessing(false);
-              setShouldPauseEvaluation(false); // Reset pause flag
-              shouldPauseRef.current = false;
-              setEvaluationState({
-                parsedQuestions,
-                trialResultsArray,
-                currentModelIndex: selectedModels.length, // Past regular trials
-                currentPhase: 'inconsistent',
-                currentQuestionIndex: 0,
-                currentTrialNumber: trialNum,
-                inconsistentQuestions
-              });
-              toast({
-                title: "Evaluation Paused",
-                description: "You can resume from where you left off.",
-                status: "info",
-                duration: 3000,
-              });
-              return;
-            }
-
-            try {
-              const trialResults = await runBatchedTrial(
-                model,
-                modelInconsistentQuestions.map((q: {index: number, question: {id: string, question: string, answer: string}}) => q.question),
-                systemPrompt,
-                trialNum,
-                controller.signal
-              );
-              
-              // Distribute results back to the corresponding questions
-              trialResults.forEach((result, idx) => {
-                const questionIndex = modelInconsistentQuestions[idx].index;
-                
-                if (!trialResultsArray[questionIndex].modelResults[modelId].additionalTrials) {
-                  trialResultsArray[questionIndex].modelResults[modelId].additionalTrials = [];
-                }
-                trialResultsArray[questionIndex].modelResults[modelId].additionalTrials!.push(result);
-              });
-              
-              setProgress(prev => ({ ...prev, current: prev.current + 1 }));
-              setTrialResults([...trialResultsArray]);
-            } catch (error) {
-              // Handle error by pausing
-              setIsPaused(true);
-              setIsEvaluating(false);
-              setIsProcessing(false);
-              setShouldPauseEvaluation(false);
-              shouldPauseRef.current = false;
-              setEvaluationState({
-                parsedQuestions,
-                trialResultsArray,
-                currentModelIndex: selectedModels.length,
-                currentPhase: 'inconsistent',
-                currentQuestionIndex: 0,
-                currentTrialNumber: trialNum,
-                inconsistentQuestions
-              });
-              
-              toast({
-                title: "API Error - Evaluation Paused",
-                description: `Error encountered: ${error instanceof Error ? error.message : 'Unknown error'}. Click Resume to retry.`,
-                status: "error",
-                duration: 10000,
-                isClosable: true,
-              });
-              return;
-            }
-          }
-          
-          if (shouldStopRef.current) {
-            wasStopped = true;
-            break;
-          }
-
-          // Calculate percentage correct out of 10 trials for each inconsistent question
-          for (const {index} of modelInconsistentQuestions) {
-            const modelResult = trialResultsArray[index].modelResults[modelId];
-            const allTrials = [
-              modelResult.trial1,
-              modelResult.trial2,
-              modelResult.trial3,
-              ...(modelResult.additionalTrials || [])
-            ].filter(Boolean) as TrialResult[];
-            
-            // Filter out aborted trials from the calculation
-            const nonAbortedTrials = allTrials.filter(t => !t.aborted);
-            
-            // Only calculate percentage if we have non-aborted trials
-            if (nonAbortedTrials.length > 0) {
-              const correctCount = nonAbortedTrials.filter(t => t.correct).length;
-              modelResult.correctPercentage = (correctCount / nonAbortedTrials.length) * 100;
-            }
-          }
-        }
-        
-        setTrialResults([...trialResultsArray]);
       }
 
       setTrialResults(trialResultsArray);
@@ -1680,7 +1631,7 @@ export default function Home() {
           let correct = (c1 ? 1 : 0) + (c2 ? 1 : 0) + (c3 ? 1 : 0);
           let total = 3;
           if (mr.additionalTrials) {
-            mr.additionalTrials.forEach(at => { if (!at.aborted) { correct += at.correct ? 1 : 0; total++; } });
+            mr.additionalTrials.forEach(at => { total++; if (!at.aborted && at.correct) correct++; });
           }
           correctRates.push(total > 0 ? (correct / total) * 100 : 0);
         });
@@ -1821,7 +1772,7 @@ export default function Home() {
             const c1 = mr.trial1.correct, c2 = mr.trial2.correct, c3 = mr.trial3.correct;
             if ((c1 && c2 && c3) || (!c1 && !c2 && !c3)) return;
             let correct = (c1 ? 1 : 0) + (c2 ? 1 : 0) + (c3 ? 1 : 0), total = 3;
-            if (mr.additionalTrials) mr.additionalTrials.forEach(at => { if (!at.aborted) { correct += at.correct ? 1 : 0; total++; } });
+            if (mr.additionalTrials) mr.additionalTrials.forEach(at => { total++; if (!at.aborted && at.correct) correct++; });
             rates.push(total > 0 ? (correct / total) * 100 : 0);
           });
           return rates.length > 0 ? (rates.reduce((a, b) => a + b, 0) / rates.length).toFixed(1) + '%' : '—';
@@ -1930,6 +1881,10 @@ export default function Home() {
           return "OpenAI: Add your API key in the sidebar";
         } else if (provider === 'deepseek') {
           return "DeepSeek: Get an API key from deepseek.com and add it in the sidebar";
+        } else if (provider === 'claude') {
+          return "Claude: Get an API key from console.anthropic.com and add it in the sidebar";
+        } else if (provider === 'ollama') {
+          return "Ollama: Ensure Ollama is running locally and the base URL is correct";
         } else if (provider === 'openwebui') {
           return "OpenWebUI: Ensure your local API is running and configured";
         } else {
@@ -2209,10 +2164,9 @@ export default function Home() {
 
   // Helper function to determine the correct API endpoint based on model type
   const getApiEndpoint = (baseUrl: string, modelId: string, provider: string): string => {
-    // For OpenAI, all models including reasoning models use the same endpoint
-    // The o1 series models use /chat/completions but with parameter restrictions
-    
-    // Use standard chat completions endpoint for all models
+    if (provider === 'claude') {
+      return `${baseUrl}/messages`;
+    }
     return `${baseUrl}/chat/completions`;
   };
 
@@ -2230,61 +2184,65 @@ export default function Home() {
     try {
       // Get API config from stored configs
       const storedConfig = storedApiConfigs.find(config => config.provider === model.provider);
-      if (!storedConfig || !storedConfig.key) {
+      if (!storedConfig || (!storedConfig.key && model.provider !== 'ollama')) {
         const errorMsg = `No API configuration for ${model.provider}. Please add API key first.`;
         throw new Error(errorMsg);
       }
 
       const modelId = model.apiModelId || model.id;
-      
+      const isClaude = model.provider === 'claude';
+
       // Check if it's an OpenAI reasoning model (o1 series)
       const isO1Model = /^(o1|o3)(-mini|-preview)?(-\d{4}-\d{2}-\d{2})?$/i.test(modelId);
-      
-      // Build request body - o1 models have different requirements
+
+      // Build request body
       const requestBody: any = {
-        model: modelId // Use the original API model ID
+        model: modelId
       };
-      
-      if (isO1Model) {
-        // o1 models don't support system messages - combine system prompt with user message
+
+      if (isClaude) {
+        // reasoningEffort holds an effort level ("low"|"medium"|"high"|"max") or undefined for no thinking.
+        // Opus 4.7/4.8 require adaptive thinking ({type:"adaptive"}) — budget_tokens removed on those models.
+        // temperature is also removed on Opus 4.7/4.8, so never send it for Claude.
+        const effortLevel = model.reasoningEffort || null;
+        requestBody.max_tokens = effortLevel ? 16384 : 1024;
+        requestBody.system = prompt;
+        requestBody.messages = [{ role: "user", content: question }];
+        if (effortLevel) {
+          requestBody.thinking = { type: "adaptive" };
+          requestBody.output_config = { effort: effortLevel };
+        } else {
+          requestBody.thinking = { type: "disabled" };
+        }
+      } else if (isO1Model) {
         requestBody.messages = [
           { role: "user", content: `${prompt}\n\n${question}` }
         ];
-        // o1 models don't support temperature, max_tokens, stop, etc.
       } else {
-        // Standard models support system messages and parameters
         requestBody.messages = [
           { role: "system", content: prompt },
           { role: "user", content: question }
         ];
         requestBody.temperature = temperature;
+        if (model.reasoningEffort && model.provider === 'openai') {
+          requestBody.reasoning_effort = model.reasoningEffort;
+        }
       }
-      
-      // Add reasoning_effort parameter for GPT-5 and O-series models if specified
-      if (model.reasoningEffort && model.provider === 'openai') {
-        requestBody.reasoning_effort = model.reasoningEffort;
-      }
-      
-      // max_tokens: 1200,
-      //stop: ["\n\n"],
 
-      // Get the correct endpoint based on model type
       const endpoint = getApiEndpoint(storedConfig.baseUrl || "https://api.openai.com/v1", modelId, model.provider);
+      const apiHeaders = isClaude
+        ? { "Content-Type": "application/json", "x-api-key": storedConfig.key, "anthropic-version": "2023-06-01" }
+        : { "Content-Type": "application/json", "Authorization": `Bearer ${storedConfig.key}` };
 
       const response = await fetch('/api/chat', {
         method: "POST",
-        headers: { 
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           endpoint: endpoint,
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${storedConfig.key}`
-          },
+          headers: apiHeaders,
           requestBody: requestBody
         }),
-        signal: abortSignal || AbortSignal.timeout(600000), // 10 minutes for slow reasoning models
+        signal: abortSignal || AbortSignal.timeout(600000),
       });
 
       if (!response.ok) {
@@ -2313,13 +2271,18 @@ export default function Home() {
       }
 
       const data = await response.json();
-      
-      // Handle different response formats (content vs reasoning_content)
-      let rawAnswer = data.choices[0].message.content || "";
-      
+
+      let rawAnswer: string;
+      if (isClaude) {
+        // Claude returns { content: [{type: "text", text: "..."}, ...] }
+        const textBlock = Array.isArray(data.content) ? data.content.find((c: any) => c.type === 'text') : null;
+        rawAnswer = textBlock ? textBlock.text : "";
+      } else {
+        rawAnswer = data.choices[0].message.content || "";
+      }
+
       // For single questions, strip out any numbering (e.g., "1. A" -> "A")
       let cleanedAnswer = rawAnswer.trim();
-      // Remove patterns like "1.", "1)", "1-", etc. at the start
       cleanedAnswer = cleanedAnswer.replace(/^\s*\d+[.)\-:]\s*/g, '');
       const answer = cleanedAnswer.trim().toUpperCase();
       const duration = Date.now() - startTime;
@@ -2352,9 +2315,10 @@ export default function Home() {
         };
       }
       
-      const tokens = data.usage?.total_tokens || estimateTokenCount(prompt + question + answer);
-      const promptTokens = data.usage?.prompt_tokens || 0;
-      const completionTokens = data.usage?.completion_tokens || 0;
+      // Claude uses input_tokens/output_tokens, OpenAI uses prompt_tokens/completion_tokens
+      const promptTokens = data.usage?.input_tokens || data.usage?.prompt_tokens || 0;
+      const completionTokens = data.usage?.output_tokens || data.usage?.completion_tokens || 0;
+      const tokens = data.usage?.total_tokens || promptTokens + completionTokens || estimateTokenCount(prompt + question + answer);
 
 
       // Log to API logs
@@ -2447,7 +2411,7 @@ export default function Home() {
       try {
         // Get API config from stored configs
         const storedConfig = storedApiConfigs.find(config => config.provider === model.provider);
-        if (!storedConfig || !storedConfig.key) {
+        if (!storedConfig || (!storedConfig.key && model.provider !== 'ollama')) {
           const errorMsg = `No API configuration for ${model.provider}. Please add API key first.`;
           throw new Error(errorMsg);
         }
@@ -2458,67 +2422,64 @@ export default function Home() {
         ).join('\n\n');
 
         const modelId = model.apiModelId || model.id;
-        
+        const isClaude = model.provider === 'claude';
+
         // Check if it's an OpenAI reasoning model (o1 series)
         const isO1Model = /^(o1|o3)(-mini|-preview)?(-\d{4}-\d{2}-\d{2})?$/i.test(modelId);
-        
-        // Build request body - o1 models have different requirements
+
+        // Build request body
         const requestBody: any = {
-          model: modelId // Use the original API model ID
+          model: modelId
         };
-        
-        if (isO1Model) {
-          // o1 models don't support system messages - combine system prompt with user message
+
+        if (isClaude) {
+          const effortLevel = model.reasoningEffort || null;
+          requestBody.max_tokens = effortLevel ? 32768 : 2048;
+          requestBody.system = prompt;
+          requestBody.messages = [{ role: "user", content: combinedQuestion }];
+          if (effortLevel) {
+            requestBody.thinking = { type: "adaptive" };
+            requestBody.output_config = { effort: effortLevel };
+          } else {
+            requestBody.thinking = { type: "disabled" };
+          }
+        } else if (isO1Model) {
           requestBody.messages = [
             { role: "user", content: `${prompt}\n\n${combinedQuestion}` }
           ];
-          // o1 models don't support temperature, max_tokens, stop, etc.
         } else {
-          // Standard models support system messages and parameters
           requestBody.messages = [
             { role: "system", content: prompt },
             { role: "user", content: combinedQuestion }
           ];
-          
-          // DeepSeek models support temperature but may have different defaults
-          // Only add temperature for non-DeepSeek models to be safe
           if (model.provider !== 'deepseek') {
             requestBody.temperature = temperature;
           }
-        }
-        
-        // Add reasoning_effort parameter for GPT-5 and O-series models if specified
-        if (model.reasoningEffort && model.provider === 'openai') {
-          requestBody.reasoning_effort = model.reasoningEffort;
+          if (model.reasoningEffort && model.provider === 'openai') {
+            requestBody.reasoning_effort = model.reasoningEffort;
+          }
         }
 
         console.log(`[Request Body] ${JSON.stringify(requestBody).substring(0, 500)}...`);
-        
-        //max_tokens: 500, // Increased to allow for more verbose responses
-        //stop: ["\n\n"],
 
-        // Get the correct endpoint based on model type
         const endpoint = getApiEndpoint(storedConfig.baseUrl || "https://api.openai.com/v1", modelId, model.provider);
+        const apiHeaders = isClaude
+          ? { "Content-Type": "application/json", "x-api-key": storedConfig.key, "anthropic-version": "2023-06-01" }
+          : { "Content-Type": "application/json", "Authorization": `Bearer ${storedConfig.key}` };
 
         console.log(`[API Call] Provider: ${model.provider}, Endpoint: ${endpoint}, Model: ${modelId}`);
 
         let response;
         try {
-          // Use Next.js API route to avoid CORS issues
           response = await fetch('/api/chat', {
             method: "POST",
-            headers: { 
-              "Content-Type": "application/json",
-            },
+            headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               endpoint: endpoint,
-              headers: {
-                "Content-Type": "application/json",
-                "Authorization": `Bearer ${storedConfig.key}`
-              },
+              headers: apiHeaders,
               requestBody: requestBody
             }),
-            signal: abortSignal || AbortSignal.timeout(600000), // 10 minutes for slow reasoning models
+            signal: abortSignal || AbortSignal.timeout(600000),
           });
         } catch (fetchError) {
           const fetchErrorMsg = `Fetch error: ${fetchError instanceof Error ? fetchError.message : String(fetchError)}`;
@@ -2571,13 +2532,19 @@ export default function Home() {
         }
 
         const data = await response.json();
-        
-        // Handle different response formats (content vs reasoning_content)
-        const responseText = (data.choices[0].message.content || "").trim();
+
+        let rawText: string;
+        if (isClaude) {
+          const textBlock = Array.isArray(data.content) ? data.content.find((c: any) => c.type === 'text') : null;
+          rawText = textBlock ? textBlock.text : "";
+        } else {
+          rawText = data.choices[0].message.content || "";
+        }
+        const responseText = rawText.trim();
         const duration = Date.now() - startTime;
-        const totalTokens = data.usage?.total_tokens || estimateTokenCount(prompt + combinedQuestion + responseText);
-        const promptTokens = data.usage?.prompt_tokens || 0;
-        const completionTokens = data.usage?.completion_tokens || 0;
+        const promptTokens = data.usage?.input_tokens || data.usage?.prompt_tokens || 0;
+        const completionTokens = data.usage?.output_tokens || data.usage?.completion_tokens || 0;
+        const totalTokens = data.usage?.total_tokens || promptTokens + completionTokens || estimateTokenCount(prompt + combinedQuestion + responseText);
         
         
         // Parse the response to extract individual answers
@@ -2607,10 +2574,19 @@ export default function Home() {
         // Check for parsing failures - if too many answers are "ERROR", treat as API failure
         const errorCount = answers.filter(answer => answer === "ERROR").length;
         const errorRate = errorCount / batch.length;
-        
-        // If more than 50% of answers failed to parse, treat as API error and trigger auto-pause
-        if (errorRate > 0.5) {
-          throw new Error(`Response parsing failed: ${errorCount}/${batch.length} answers could not be parsed from model response. Raw response: "${responseText}"`);
+
+        // Only pause for genuine technical errors (empty response, HTTP errors, etc.).
+        // Model refusals / wrong-format responses are not transient — retrying won't help,
+        // so let them through as ERROR results and continue the evaluation.
+        const isTechnicalError = responseText.trim().length === 0 ||
+          /\b(error|exception|timeout|unauthorized|forbidden|rate.?limit|internal server|bad gateway|service unavailable)\b/i.test(responseText);
+
+        if (errorRate > 0.5 && isTechnicalError) {
+          const found = batch.length - errorCount;
+          const detail = found === 0
+            ? `no answers could be extracted`
+            : `model returned only ${found}/${batch.length} answers (incomplete response)`;
+          throw new Error(`Response parsing failed: ${detail}. Raw response: "${responseText}"`);
         }
         
         // Create results for each question in the batch
@@ -2671,39 +2647,29 @@ export default function Home() {
   // Helper function to parse batched responses
   const parseAndResponseText = (text: string, expectedCount: number): string[] => {
     const answers: string[] = [];
-    
-    
-    // Try to match numbered patterns (most common format)
-    // This matches the number and captures whatever letter follows (even if invalid)
-    const numberedPattern = /(?:^|\n)\s*(\d+)\.\s*(?:\()?([A-Za-z])(?:\))?/gim;
-    const numberedMatches = Array.from(text.matchAll(numberedPattern));
-    
-    if (numberedMatches.length >= expectedCount) {
-      
-      // Take the first N matches and validate each answer
-      numberedMatches.slice(0, expectedCount).forEach((match, idx) => {
-        const letter = match[2].toUpperCase();
-        
-        // Always add the letter, even if invalid
-        answers.push(letter);
-        
-        // Check if it's a valid answer (A-D) and log accordingly
-        if (/^[A-D]$/.test(letter)) {
-        } else {
-        }
-      });
-      
-      if (answers.length === expectedCount) {
-        return answers;
+
+    // Primary: matches numbered answers both in multi-line AND single-line responses.
+    // Captures any alphanumeric token after the number so that numeric answers like
+    // "80" are preserved (they will later be marked wrong via getValidAnswer).
+    // Works for: "1. A\n2. B", "1. A 2. 80 3. A", "1) A 2) B", etc.
+    const numberedPattern = /(?:^|[\s,;])(\d+)[.)]\s*\(?([A-Za-z][A-Za-z0-9]*|[0-9]+)\)?/gm;
+    const allMatches = Array.from(text.matchAll(numberedPattern));
+
+    if (allMatches.length >= expectedCount) {
+      // Sort by question number in case the model reordered them
+      const sorted = allMatches
+        .map(m => ({ num: parseInt(m[1]), val: m[2].toUpperCase() }))
+        .sort((a, b) => a.num - b.num)
+        .slice(0, expectedCount);
+      if (sorted.length === expectedCount) {
+        return sorted.map(s => s.val);
       }
     }
-    
-    // If numbered pattern didn't work, try to extract just letters from lines starting with numbers
+
+    // Fallback: try line-by-line for multi-line responses
     const lines = text.split('\n');
     for (const line of lines) {
       if (answers.length >= expectedCount) break;
-      
-      // Match lines that start with a number followed by anything with a letter
       const lineMatch = line.match(/^\s*\d+[.):]\s*(?:\()?([A-D])\)?/i);
       if (lineMatch) {
         answers.push(lineMatch[1].toUpperCase());
@@ -2743,24 +2709,30 @@ export default function Home() {
       }
     }
     
-    // Last resort: try to find any A-D letters in the text
+    // Word-boundary letter search — safe: \b prevents matching letters inside words.
+    // Finds "A" in "(A)" but NOT "B" in "BMI".
     const letters = text.match(/\b([A-D])\b/gi);
-    
+
     if (letters && letters.length >= expectedCount) {
-      const result = letters.slice(0, expectedCount).map(l => l.toUpperCase());
-      return result;
+      return letters.slice(0, expectedCount).map(l => l.toUpperCase());
     }
-    
-    // Ultra fallback: Look for letters without word boundaries (more permissive)
+    // Keep word-boundary results as partial if they beat what we have
+    if (letters && letters.length > answers.length) {
+      answers.length = 0;
+      letters.forEach(l => answers.push(l.toUpperCase()));
+    }
+
+    // Ultra fallback: no word boundaries — only use when enough to fill all slots;
+    // never update partial answers (would pick up false positives like "B" in "BMI")
     const looseLetters = text.match(/([A-D])/gi);
-    
+
     if (looseLetters && looseLetters.length >= expectedCount) {
-      const result = looseLetters.slice(0, expectedCount).map(l => l.toUpperCase());
-      return result;
+      return looseLetters.slice(0, expectedCount).map(l => l.toUpperCase());
     }
-    
-    // If we can't parse, return ERROR for all
-    return Array(expectedCount).fill("ERROR");
+
+    // Pad whatever was found with ERROR for missing answers
+    while (answers.length < expectedCount) answers.push("ERROR");
+    return answers.slice(0, expectedCount);
   };
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -2880,37 +2852,33 @@ export default function Home() {
     reader.readAsText(file);
   };
 
-  const verifyApiKey = async (configId?: string) => {
+  const verifyApiKey = async (configId?: string, configOverride?: StoredApiConfig): Promise<number> => {
     setIsLoading(true);
-    
+
     try {
       let newModels: Model[] = [];
       let totalModelCount = 0;
       let configsToVerify: StoredApiConfig[] = [];
-      
+
       // Determine which configs to verify
       if (configId) {
-        // Verify just one specific config
-        const config = storedApiConfigs.find(config => config.id === configId);
+        // Use the override if provided (avoids stale React state when called immediately
+        // after setStoredApiConfigs, before the state update has been committed).
+        const config = configOverride || storedApiConfigs.find(config => config.id === configId);
         if (!config) {
-          // The config might have been removed, so let's use the current provider settings instead
-          
-          // If we have configs for the current provider, use those
           const currentProviderConfigs = storedApiConfigs.filter(c => c.provider === currentProvider);
           if (currentProviderConfigs.length > 0) {
             configsToVerify = [currentProviderConfigs[0]];
           } else {
-            // Otherwise fall back to the current form values
             const apiKey = getApiKey();
-            if (!apiKey) {
+            if (!apiKey && currentProvider !== 'ollama') {
               throw new Error("Please enter an API key");
             }
-            // Create a temporary config for verification
             configsToVerify = [{
               id: 'temp-' + Date.now(),
               provider: currentProvider,
-              key: apiKey,
-              maskedKey: apiKey.substring(0, 6) + "..." + apiKey.substring(apiKey.length - 6),
+              key: apiKey || '',
+              maskedKey: apiKey ? apiKey.substring(0, 6) + "..." + apiKey.substring(apiKey.length - 6) : '(no key)',
               baseUrl: getBaseUrl()
             }];
           }
@@ -2923,15 +2891,15 @@ export default function Home() {
       } else {
         // Fallback to current provider settings if no stored configs
         const apiKey = getApiKey();
-        if (!apiKey) {
+        if (!apiKey && currentProvider !== 'ollama') {
           throw new Error("Please enter an API key");
         }
         // Create a temporary config for verification
         configsToVerify = [{
           id: 'temp',
           provider: currentProvider,
-          key: apiKey,
-          maskedKey: apiKey.substring(0, 6) + "..." + apiKey.substring(apiKey.length - 6),
+          key: apiKey || '',
+          maskedKey: apiKey ? apiKey.substring(0, 6) + "..." + apiKey.substring(apiKey.length - 6) : '(no key)',
           baseUrl: getBaseUrl()
         }];
       }
@@ -2959,36 +2927,56 @@ export default function Home() {
               body: JSON.stringify({
                 endpoint: modelsEndpoint,
                 method: 'GET',
-                headers: {
-                  'Authorization': `Bearer ${apiKey}`,
-                  'Content-Type': 'application/json'
-                }
+                headers: provider === 'claude'
+                  ? {
+                      'x-api-key': apiKey,
+                      'anthropic-version': '2023-06-01',
+                      'Content-Type': 'application/json'
+                    }
+                  : {
+                      'Authorization': `Bearer ${apiKey}`,
+                      'Content-Type': 'application/json'
+                    }
               }),
               signal: controller.signal
             });
           
           if (!response.ok) {
-            // Handle specific error codes with more detailed information
-            if (response.status === 401) {
-              const errorMessage = `Authentication failed (401) for ${provider}: Invalid or expired API key`;
-              console.error(`[Models Fetch Error] ${errorMessage}`);
+            let cleanError = "";
+            try {
+              const errBody = await response.json();
+              cleanError = String(errBody?.error || "").substring(0, 200);
+            } catch { /* ignore */ }
+            const providerLabel = provider === 'openai' ? 'OpenAI' : provider === 'deepseek' ? 'DeepSeek' : provider === 'claude' ? 'Claude' : provider === 'ollama' ? 'Ollama' : 'OpenWebUI';
+
+            console.warn(`[Models Fetch] Status ${response.status} from ${providerLabel} (${modelsEndpoint})`);
+
+            if (response.status === 401 || response.status === 403) {
               toast({
-                title: `${provider} Authentication Error`,
-                description: `Invalid or expired API key. Please update your ${provider} API key.`,
+                title: `${providerLabel} Authentication Error`,
+                description: cleanError || `Invalid or expired API key. Please update your ${providerLabel} API key.`,
+                status: "error",
+                duration: 6000,
+                isClosable: true,
+              });
+            } else if (response.status === 404) {
+              toast({
+                title: `${providerLabel} API Not Found (404)`,
+                description: `Could not reach ${modelsEndpoint}. Make sure the server is running and the Base URL is correct.`,
+                status: "error",
+                duration: 6000,
+                isClosable: true,
+              });
+            } else {
+              toast({
+                title: `${providerLabel} API Error (${response.status})`,
+                description: cleanError || `Failed to fetch models. Check the Base URL and API key.`,
                 status: "error",
                 duration: 5000,
                 isClosable: true,
               });
-            } else {
-              // Attempt to get more detailed error information
-              try {
-                const errorData = await response.text();
-                console.error(`[Models Fetch Error] Status ${response.status}: ${errorData}`);
-              } catch {
-              }
             }
-            
-            // For non-401 errors, throw to trigger catch block with fallback
+
             throw new Error(`API returned status ${response.status}`);
           }
           
@@ -3144,8 +3132,45 @@ export default function Home() {
                   apiModelId: model.id,
                 });
               }
+            } else if (provider === 'claude') {
+              // claude-3-7-sonnet, claude-opus-4-*, and claude-sonnet-4-* support adaptive thinking.
+              // Effort levels replace the old budget_tokens API (removed on Opus 4.7/4.8).
+              // "max" effort is Opus-only; Sonnet/Haiku cap at "high".
+              const isClaudeWithThinking = /^claude-(3-7-sonnet|opus-4|sonnet-4)/i.test(model.id);
+              if (isClaudeWithThinking) {
+                // No thinking — standard inference
+                providerModels.push({
+                  id: baseId,
+                  name: `${model.id} (No thinking)`,
+                  provider,
+                  apiModelId: model.id,
+                });
+                const isOpus = /^claude-opus-4/i.test(model.id);
+                const effortLevels: { effort: string; suffix: string }[] = [
+                  { effort: 'low', suffix: ' (Low thinking)' },
+                  { effort: 'medium', suffix: ' (Medium thinking)' },
+                  { effort: 'high', suffix: ' (High thinking)' },
+                  ...(isOpus ? [{ effort: 'xhigh', suffix: ' (XHigh thinking)' }, { effort: 'max', suffix: ' (Max thinking)' }] : []),
+                ];
+                effortLevels.forEach(({ effort, suffix }) => {
+                  providerModels.push({
+                    id: `${baseId}-thinking-${effort}`,
+                    name: `${model.id}${suffix}`,
+                    provider,
+                    apiModelId: model.id,
+                    reasoningEffort: effort,
+                  });
+                });
+              } else {
+                providerModels.push({
+                  id: baseId,
+                  name: model.id,
+                  provider,
+                  apiModelId: model.id,
+                });
+              }
             } else {
-              // Non-OpenAI providers - regular models
+              // Other providers (deepseek, ollama, openwebui) - regular models
               providerModels.push({
                 id: baseId,
                 name: model.id,
@@ -3157,6 +3182,19 @@ export default function Home() {
           
           newModels = [...newModels, ...providerModels];
           totalModelCount += providerModels.length;
+
+          // If the endpoint returned 200 but no models, the key may be wrong or the server has no models
+          if (providerModels.length === 0 && provider !== 'deepseek') {
+            const providerLabel = provider === 'openai' ? 'OpenAI' : provider === 'deepseek' ? 'DeepSeek' : provider === 'claude' ? 'Claude' : provider === 'ollama' ? 'Ollama' : 'Open WebUI';
+            toast({
+              title: `No models returned from ${providerLabel}`,
+              description: `The API responded but returned 0 models. Check your API key and base URL.`,
+              status: "warning",
+              duration: 5000,
+              isClosable: true,
+            });
+          }
+
           } finally {
             clearTimeout(timeoutId);
           }
@@ -3173,8 +3211,10 @@ export default function Home() {
             });
           }
           
-          // If DeepSeek fails to fetch models, add default models
-          if (provider === 'deepseek') {
+          // If DeepSeek fails for a non-auth reason, fall back to default models.
+          // Auth failures (401/403) mean the key is wrong — don't pretend it worked.
+          const isAuthError = error instanceof Error && /status (401|403)/.test(error.message);
+          if (provider === 'deepseek' && !isAuthError) {
             console.log('DeepSeek API fetch failed, using default models');
             const deepseekModels = [
               { id: 'deepseek-chat', name: 'DeepSeek Chat' },
@@ -3207,58 +3247,51 @@ export default function Home() {
       
       // If checking a specific config, only update models from that provider
       // Otherwise, replace all models with new ones
-      setAvailableModels(prevModels => {
-        let updatedModels;
-        
-        if (configId) {
-          // If verifying a specific config, only update models from its provider
-          const config = storedApiConfigs.find(c => c.id === configId);
-          if (config) {
-            // Remove existing models from this provider
-            const filteredModels = prevModels.filter(m => m.provider !== config.provider);
-            // Add new models from this provider
-            updatedModels = [...filteredModels, ...newModels];
+      // Only update the model list if we actually loaded models (or this is a full refresh).
+      // When verifying a single config that returned 0 models, keep existing models intact.
+      const isSingleConfig = !!configId;
+      if (!isSingleConfig || newModels.length > 0) {
+        setAvailableModels(prevModels => {
+          let updatedModels;
+
+          if (configId) {
+            const config = configOverride || storedApiConfigs.find(c => c.id === configId);
+            if (config) {
+              const filteredModels = prevModels.filter(m => m.provider !== config.provider);
+              updatedModels = [...filteredModels, ...newModels];
+            } else {
+              const existingIds = new Set(prevModels.map(m => m.id));
+              const uniqueNewModels = newModels.filter(model => !existingIds.has(model.id));
+              updatedModels = [...prevModels, ...uniqueNewModels];
+            }
+          } else if (storedApiConfigs.length > 0 && configsToVerify.length === storedApiConfigs.length) {
+            updatedModels = newModels;
           } else {
-            // If config not found, just add the new models
-            // Make sure we're not adding duplicates
-            const existingIds = new Set(prevModels.map(m => m.id));
+            const verifiedProviders = new Set(configsToVerify.map(c => c.provider));
+            const filteredModels = prevModels.filter(m => !verifiedProviders.has(m.provider));
+            const existingIds = new Set(filteredModels.map(m => m.id));
             const uniqueNewModels = newModels.filter(model => !existingIds.has(model.id));
-            updatedModels = [...prevModels, ...uniqueNewModels];
+            updatedModels = [...filteredModels, ...uniqueNewModels];
           }
-        } else if (storedApiConfigs.length > 0 && configsToVerify.length === storedApiConfigs.length) {
-          // If verifying all configs, replace all models
-          updatedModels = newModels;
-        } else {
-          // For other cases, merge with existing models
-          const verifiedProviders = new Set(configsToVerify.map(c => c.provider));
-          const filteredModels = prevModels.filter(m => !verifiedProviders.has(m.provider));
-          
-          // Make sure we're not adding duplicates
-          const existingIds = new Set(filteredModels.map(m => m.id));
-          const uniqueNewModels = newModels.filter(model => !existingIds.has(model.id));
-          
-          updatedModels = [...filteredModels, ...uniqueNewModels];
-        }
-        
-        // Final safety check - ensure all IDs are unique
-        const deduplicatedModels = deduplicateModelsById(updatedModels);
-        
-        // Save models to localStorage for persistence
-        localStorage.setItem('availableModels', JSON.stringify(deduplicatedModels));
-        return deduplicatedModels;
-      });
-      
-      if (newModels.length === 0) {
-        // Just warn instead of throwing an error
+
+          const deduplicatedModels = deduplicateModelsById(updatedModels);
+          localStorage.setItem('availableModels', JSON.stringify(deduplicatedModels));
+          return deduplicatedModels;
+        });
       }
-      
-      toast({
-        title: `Models loaded`,
-        description: `${totalModelCount} models available from ${configsToVerify.length} API configuration(s)`,
-        status: "success",
-        duration: 3000,
-        isClosable: true,
-      });
+
+      // Only show the success toast when not called from addApiConfig (which shows its own)
+      if (!configOverride) {
+        toast({
+          title: `Models loaded`,
+          description: `${totalModelCount} models available from ${configsToVerify.length} API configuration(s)`,
+          status: "success",
+          duration: 3000,
+          isClosable: true,
+        });
+      }
+
+      return totalModelCount;
     } catch (error) {
       toast({
         title: `Error loading models`,
@@ -3267,6 +3300,7 @@ export default function Home() {
         duration: 3000,
         isClosable: true,
       });
+      return 0;
     } finally {
       setIsLoading(false);
     }
@@ -3335,6 +3369,7 @@ export default function Home() {
         left={0}
         top={0}
         zIndex={1000}
+        overflowY="auto"
       >
         <VStack spacing={6} align="stretch">
           <Box mb={5}>
@@ -3386,6 +3421,8 @@ export default function Home() {
                 >
                   <option value="openai">OpenAI</option>
                   <option value="deepseek">DeepSeek</option>
+                  <option value="claude">Claude (Anthropic)</option>
+                  <option value="ollama">Ollama</option>
                   <option value="openwebui">OpenWebUI</option>
                 </Select>
               </FormControl>
@@ -3465,11 +3502,15 @@ export default function Home() {
                       <Text fontSize="10px" color="gray.600">
                         Enter your API key above and click "Load API Models"
                       </Text>
-                      <HStack spacing={0} fontSize="10px" color="gray.500">
+                      <HStack spacing={0} fontSize="10px" color="gray.500" flexWrap="wrap">
                         <Text>Supported providers:</Text>
                         <Text fontWeight="medium" color="blue.600" ml={1}>OpenAI</Text>
                         <Text mx={1}>•</Text>
                         <Text fontWeight="medium" color="blue.600">DeepSeek</Text>
+                        <Text mx={1}>•</Text>
+                        <Text fontWeight="medium" color="blue.600">Claude</Text>
+                        <Text mx={1}>•</Text>
+                        <Text fontWeight="medium" color="blue.600">Ollama</Text>
                         <Text mx={1}>•</Text>
                         <Text fontWeight="medium" color="blue.600">OpenWebUI</Text>
                       </HStack>
@@ -3505,9 +3546,11 @@ export default function Home() {
                           />
                           <VStack spacing={0.5} align="flex-start">
                             <Text fontWeight="bold" color="blue.700">
-                              {config.provider === 'openai' ? 'OpenAI' : 
-                               config.provider === 'deepseek' ? 'DeepSeek' : 
-                               config.provider === 'openwebui' ? 'Open WebUI' : 
+                              {config.provider === 'openai' ? 'OpenAI' :
+                               config.provider === 'deepseek' ? 'DeepSeek' :
+                               config.provider === 'claude' ? 'Claude' :
+                               config.provider === 'ollama' ? 'Ollama' :
+                               config.provider === 'openwebui' ? 'Open WebUI' :
                                config.provider}
                               <Text as="span" ml={1} fontSize="10px" color="gray.500">
                                 ({availableModels.filter(m => m.provider === config.provider).length || 0} models)
@@ -3649,32 +3692,44 @@ export default function Home() {
                             No models available. Please load API models from the sidebar.
                           </Box>
                         ) : (
-                          availableModels
-                            .filter(model => 
-                              !selectedModels.some(m => m.id === model.id) &&
-                              (model.name.toLowerCase().includes(modelSearch.toLowerCase()) ||
-                               model.id.toLowerCase().includes(modelSearch.toLowerCase()))
-                            )
-                            .map(model => (
-                              <MenuItem
-                                key={model.id}
-                                onClick={() => {
-                                  setSelectedModels(prev => {
-                                    // Check if the model is already selected (by ID)
-                                    if (prev.some(m => m.id === model.id)) {
-                                      return prev; // Don't add duplicates
-                                    }
-                                    return [...prev, model];
-                                  });
-                                  setModelSearch("");
-                                }}
-                                py={2}
-                                bg="gray.50"
-                                _hover={{ bg: "gray.100" }}
-                              >
-                                {model.name}
-                              </MenuItem>
-                            ))
+                          (() => {
+                            const providerLabel = (p: string) =>
+                              p === 'openai' ? 'OpenAI' : p === 'deepseek' ? 'DeepSeek' : p === 'claude' ? 'Claude' : p === 'ollama' ? 'Ollama' : 'OpenWebUI';
+                            // Find names that appear from more than one provider
+                            const nameCounts: Record<string, Set<string>> = {};
+                            availableModels.forEach(m => {
+                              if (!nameCounts[m.name]) nameCounts[m.name] = new Set();
+                              nameCounts[m.name].add(m.provider);
+                            });
+                            return availableModels
+                              .filter(model =>
+                                !selectedModels.some(m => m.id === model.id) &&
+                                (model.name.toLowerCase().includes(modelSearch.toLowerCase()) ||
+                                 model.id.toLowerCase().includes(modelSearch.toLowerCase()))
+                              )
+                              .map(model => (
+                                <MenuItem
+                                  key={model.id}
+                                  onClick={() => {
+                                    setSelectedModels(prev => {
+                                      if (prev.some(m => m.id === model.id)) return prev;
+                                      return [...prev, model];
+                                    });
+                                    setModelSearch("");
+                                  }}
+                                  py={2}
+                                  bg="gray.50"
+                                  _hover={{ bg: "gray.100" }}
+                                >
+                                  {model.name}
+                                  {(nameCounts[model.name]?.size ?? 0) > 1 && (
+                                    <Text as="span" fontSize="xs" color="gray.500" ml={1}>
+                                      ({providerLabel(model.provider)})
+                                    </Text>
+                                  )}
+                                </MenuItem>
+                              ));
+                          })()
                         )}
                       </Box>
                     </MenuList>
@@ -3688,8 +3743,8 @@ export default function Home() {
                   <Text fontWeight="medium" fontSize="sm" mb={1.5}>Selected Models:</Text>
                   <Flex wrap="wrap" gap={2}>
                     {selectedModels.map((model, index) => {
-                      // Check if this model has a valid API key
-                      const hasValidKey = getActiveApiKeyForProvider(model.provider as Provider) !== null;
+                      // Ollama doesn't require a key — treat it as always valid
+                      const hasValidKey = model.provider === 'ollama' || getActiveApiKeyForProvider(model.provider as Provider) !== null;
                       return (
                         <Box
                           key={model.id}
@@ -6196,9 +6251,7 @@ export default function Home() {
                     let correct = (c1 ? 1 : 0) + (c2 ? 1 : 0) + (c3 ? 1 : 0);
                     let total = 3;
                     if (mr.additionalTrials) {
-                      mr.additionalTrials.forEach(at => {
-                        if (!at.aborted) { correct += at.correct ? 1 : 0; total++; }
-                      });
+                      mr.additionalTrials.forEach(at => { total++; if (!at.aborted && at.correct) correct++; });
                     }
                     correctRates.push(total > 0 ? (correct / total) * 100 : 0);
                   });
@@ -6560,7 +6613,7 @@ export default function Home() {
                       const c1 = mr.trial1.correct, c2 = mr.trial2.correct, c3 = mr.trial3.correct;
                       if ((c1 && c2 && c3) || (!c1 && !c2 && !c3)) return;
                       let correct = (c1 ? 1 : 0) + (c2 ? 1 : 0) + (c3 ? 1 : 0), total = 3;
-                      if (mr.additionalTrials) mr.additionalTrials.forEach(at => { if (!at.aborted) { correct += at.correct ? 1 : 0; total++; } });
+                      if (mr.additionalTrials) mr.additionalTrials.forEach(at => { total++; if (!at.aborted && at.correct) correct++; });
                       rates.push(total > 0 ? (correct / total) * 100 : 0);
                     });
                     const avg = rates.length > 0 ? rates.reduce((a, b) => a + b, 0) / rates.length : null;
@@ -6649,7 +6702,7 @@ export default function Home() {
                               const c1 = mr.trial1.correct, c2 = mr.trial2.correct, c3 = mr.trial3.correct;
                               if ((c1 && c2 && c3) || (!c1 && !c2 && !c3)) return;
                               let correct = (c1?1:0)+(c2?1:0)+(c3?1:0), total = 3;
-                              if (mr.additionalTrials) mr.additionalTrials.forEach(at => { if (!at.aborted) { correct += at.correct?1:0; total++; } });
+                              if (mr.additionalTrials) mr.additionalTrials.forEach(at => { total++; if (!at.aborted && at.correct) correct++; });
                               rates.push(total > 0 ? (correct/total)*100 : 0);
                             });
                             if (rates.length === 0) return;
