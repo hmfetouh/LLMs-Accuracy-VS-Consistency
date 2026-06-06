@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, Fragment, useRef } from "react";
-import { Bar, Bubble } from 'react-chartjs-2';
+import { Bar, Bubble, Scatter } from 'react-chartjs-2';
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -207,6 +207,8 @@ export default function Home() {
   const [activeCRPerClassView, setActiveCRPerClassView] = useState<"table" | "charts">("table");
   const [activeCSPerClassView, setActiveCSPerClassView] = useState<"table" | "charts">("table");
   const [activeVCRPerClassView, setActiveVCRPerClassView] = useState<"table" | "charts">("table");
+  const [activePerformanceView, setActivePerformanceView] = useState<"table" | "overview" | "per-model">("table");
+  const [activeAccVsTimeView, setActiveAccVsTimeView] = useState<"table" | "charts">("table");
   const [apiLogs, setApiLogs] = useState<Array<{
     timestamp: number;
     model: string;
@@ -1829,6 +1831,63 @@ export default function Home() {
       const link = document.createElement('a');
       link.setAttribute('href', URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' })));
       link.setAttribute('download', `variable_correct_rate_per_class_${new Date().toISOString().slice(0, 10)}.csv`);
+      link.style.visibility = 'hidden';
+      document.body.appendChild(link); link.click(); document.body.removeChild(link);
+      toast({ title: "Table Exported Successfully", status: "success", duration: 3000 });
+    } catch { toast({ title: "Export Failed", status: "error", duration: 5000 }); }
+  };
+
+  const exportAccVsTimeTable = () => {
+    if (trialResults.length === 0) { toast({ title: "No Data to Export", status: "warning", duration: 3000 }); return; }
+    try {
+      const header = ['Model', 'Overall Accuracy (%)', 'Avg Response Time (ms)', 'Questions Evaluated'];
+      let csv = header.map(h => `"${h}"`).join(',') + '\n';
+      selectedModels.forEach(model => {
+        let t1c = 0, t2c = 0, t3c = 0, total = 0, totalTime = 0, timeCount = 0;
+        trialResults.forEach(qResult => {
+          const mr = qResult.modelResults[model.id];
+          if (!mr) return;
+          total++;
+          if (mr.trial1?.correct) t1c++;
+          if (mr.trial2?.correct) t2c++;
+          if (mr.trial3?.correct) t3c++;
+          if (mr.trial1 && !mr.trial1.aborted) { totalTime += mr.trial1.time; timeCount++; }
+        });
+        const acc = total > 0 ? ((t1c + t2c + t3c) / (total * 3)) * 100 : 0;
+        const avgTime = timeCount > 0 ? totalTime / timeCount : 0;
+        csv += [`"${model.name}"`, `"${acc.toFixed(1)}"`, `"${avgTime.toFixed(0)}"`, `"${total}"`].join(',') + '\n';
+      });
+      const link = document.createElement('a');
+      link.setAttribute('href', URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' })));
+      link.setAttribute('download', `accuracy_vs_response_time_${new Date().toISOString().slice(0, 10)}.csv`);
+      link.style.visibility = 'hidden';
+      document.body.appendChild(link); link.click(); document.body.removeChild(link);
+      toast({ title: "Table Exported Successfully", status: "success", duration: 3000 });
+    } catch { toast({ title: "Export Failed", status: "error", duration: 5000 }); }
+  };
+
+  const exportPerformanceTable = () => {
+    if (trialResults.length === 0) { toast({ title: "No Data to Export", status: "warning", duration: 3000 }); return; }
+    try {
+      const header = ['Model', 'Avg Prompt Length (tokens)', 'Avg Response Time (ms)', 'Questions Evaluated'];
+      let csv = header.map(h => `"${h}"`).join(',') + '\n';
+      selectedModels.forEach(model => {
+        let totalTokens = 0, totalTime = 0, count = 0;
+        trialResults.forEach(qResult => {
+          const mr = qResult.modelResults[model.id];
+          if (!mr?.trial1 || mr.trial1.aborted) return;
+          const qTokens = estimateTokenCount(qResult.question);
+          totalTokens += qTokens;
+          totalTime += mr.trial1.time;
+          count++;
+        });
+        const avgTokens = count > 0 ? (totalTokens / count).toFixed(1) : '—';
+        const avgTime = count > 0 ? (totalTime / count).toFixed(0) : '—';
+        csv += [`"${model.name}"`, `"${avgTokens}"`, `"${avgTime}"`, `"${count}"`].join(',') + '\n';
+      });
+      const link = document.createElement('a');
+      link.setAttribute('href', URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' })));
+      link.setAttribute('download', `performance_${new Date().toISOString().slice(0, 10)}.csv`);
       link.style.visibility = 'hidden';
       document.body.appendChild(link); link.click(); document.body.removeChild(link);
       toast({ title: "Table Exported Successfully", status: "success", duration: 3000 });
@@ -5576,7 +5635,7 @@ export default function Home() {
                                     <Fragment key={`${cls}-h`}>
                                       <Th fontSize="xs" textAlign="center" borderBottom="2px" whiteSpace="nowrap" width="1%">Correct</Th>
                                       <Th fontSize="xs" textAlign="center" borderBottom="2px" whiteSpace="nowrap" width="1%">Variable</Th>
-                                      <Th fontSize="xs" textAlign="center" borderBottom="2px" borderRight="2px" borderColor="black" whiteSpace="nowrap" width="1%">Incorrect</Th>
+                                      <Th fontSize="xs" textAlign="center" borderBottom="2px" borderRight="2px" sx={{ borderRightColor: 'black' }} whiteSpace="nowrap" width="1%">Incorrect</Th>
                                     </Fragment>
                                   ))}
                                 </Tr>
@@ -5584,7 +5643,7 @@ export default function Home() {
                               <Tbody>
                                 {selectedModels.map((model, mi) => (
                                   <Tr key={model.id}>
-                                    <Td fontWeight="medium" borderRight="1px" borderColor="black" whiteSpace="nowrap">{model.name}</Td>
+                                    <Td fontWeight="medium" borderRight="1px" sx={{ borderRightColor: 'black' }} whiteSpace="nowrap">{model.name}</Td>
                                     {classModelData.map(({ cls, models: mds }) => {
                                       const d = mds[mi];
                                       return (
@@ -5595,7 +5654,7 @@ export default function Home() {
                                           <Td fontSize="xs" textAlign="center" whiteSpace="nowrap" width="1%">
                                             {d.total > 0 ? (<><Text color="orange.500" fontWeight="bold">{d.varPct.toFixed(1)}%</Text><Text fontSize="xs" color="gray.500">({d.variable}/{d.total})</Text></>) : <Text color="gray.400">—</Text>}
                                           </Td>
-                                          <Td fontSize="xs" textAlign="center" borderRight="2px" borderColor="black" whiteSpace="nowrap" width="1%">
+                                          <Td fontSize="xs" textAlign="center" borderRight="2px" sx={{ borderRightColor: 'black' }} whiteSpace="nowrap" width="1%">
                                             {d.total > 0 ? (<><Text color="red.500" fontWeight="bold">{d.aiPct.toFixed(1)}%</Text><Text fontSize="xs" color="gray.500">({d.ai}/{d.total})</Text></>) : <Text color="gray.400">—</Text>}
                                           </Td>
                                         </Fragment>
@@ -6682,6 +6741,354 @@ export default function Home() {
                           </Box>
                         );
                       })()}
+                    </VStack>
+                  </Box>
+                );
+              })()}
+
+              {/* Accuracy vs Response Time Section */}
+              {activeResultTab === "summary" && trialResults.length > 0 && (() => {
+                const PERF_COLORS = ['#3182CE','#38A169','#DD6B20','#805AD5','#D53F8C','#319795','#744210','#1A365D','#276749','#702459'];
+                const PERF_COLORS_BG = ['rgba(49,130,206,0.75)','rgba(56,161,105,0.75)','rgba(221,107,32,0.75)','rgba(128,90,213,0.75)','rgba(213,63,140,0.75)','rgba(49,151,149,0.75)','rgba(116,66,16,0.75)','rgba(26,54,93,0.75)','rgba(39,103,73,0.75)','rgba(112,36,89,0.75)'];
+
+                type AccTimeRow = { model: string; acc: number; avgTimeMs: number; total: number };
+                const rows: AccTimeRow[] = selectedModels.map(model => {
+                  let t1c = 0, t2c = 0, t3c = 0, total = 0, totalTime = 0, timeCount = 0;
+                  trialResults.forEach(qResult => {
+                    const mr = qResult.modelResults[model.id];
+                    if (!mr) return;
+                    total++;
+                    if (mr.trial1?.correct) t1c++;
+                    if (mr.trial2?.correct) t2c++;
+                    if (mr.trial3?.correct) t3c++;
+                    if (mr.trial1 && !mr.trial1.aborted) { totalTime += mr.trial1.time; timeCount++; }
+                  });
+                  return {
+                    model: model.name,
+                    acc: total > 0 ? ((t1c + t2c + t3c) / (total * 3)) * 100 : 0,
+                    avgTimeMs: timeCount > 0 ? totalTime / timeCount : 0,
+                    total,
+                  };
+                }).filter(r => r.total > 0);
+
+                const scatterData = {
+                  datasets: rows.map((r, i) => ({
+                    label: r.model,
+                    data: [{ x: parseFloat(r.acc.toFixed(2)), y: Math.round(r.avgTimeMs) }],
+                    backgroundColor: PERF_COLORS_BG[i % PERF_COLORS_BG.length],
+                    borderColor: PERF_COLORS[i % PERF_COLORS.length],
+                    pointRadius: 10,
+                    pointHoverRadius: 13,
+                    pointStyle: 'circle' as const,
+                    borderWidth: 2,
+                  }))
+                };
+                const scatterOptions: ChartOptions<'scatter'> = {
+                  responsive: true,
+                  plugins: {
+                    legend: { position: 'bottom', labels: { usePointStyle: true, pointStyle: 'circle' } },
+                    tooltip: {
+                      callbacks: {
+                        label: (ctx) => {
+                          const r = rows[ctx.datasetIndex];
+                          return ` ${r.model}: ${Number(ctx.parsed.x ?? 0).toFixed(1)}% accuracy, ${ctx.parsed.y} ms`;
+                        }
+                      }
+                    }
+                  },
+                  scales: {
+                    x: { title: { display: true, text: 'Overall Accuracy (%)' }, min: 0, max: 100 },
+                    y: { title: { display: true, text: 'Avg Response Time (ms)' }, beginAtZero: true }
+                  }
+                };
+
+                // Key Insights
+                const sortedByAcc = [...rows].sort((a, b) => b.acc - a.acc);
+                const sortedByTime = [...rows].sort((a, b) => b.avgTimeMs - a.avgTimeMs);
+                const mostAccurate = sortedByAcc[0];
+                const leastAccurate = sortedByAcc[sortedByAcc.length - 1];
+                const slowest = sortedByTime[0];
+                const fastest = sortedByTime[sortedByTime.length - 1];
+                const insightText = rows.length > 1
+                  ? `${mostAccurate.model} achieved the highest accuracy (${mostAccurate.acc.toFixed(1)}%) with an avg response time of ${mostAccurate.avgTimeMs.toFixed(0)} ms. ${slowest.model} had the longest avg response time (${slowest.avgTimeMs.toFixed(0)} ms) with ${slowest.acc.toFixed(1)}% accuracy, while ${fastest.model} was fastest (${fastest.avgTimeMs.toFixed(0)} ms) at ${fastest.acc.toFixed(1)}% accuracy.`
+                  : rows.length === 1
+                    ? `${rows[0].model}: ${rows[0].acc.toFixed(1)}% accuracy, avg response time ${rows[0].avgTimeMs.toFixed(0)} ms.`
+                    : '';
+
+                return (
+                  <Box mt={8}>
+                    <Text fontSize="lg" fontWeight="bold" mb={2}>Accuracy vs. Response Time</Text>
+                    <VStack align="stretch" spacing={4}>
+                      <Text fontSize="sm" color="gray.600">
+                        Plots each model's overall accuracy against its average response time, making it easy to spot trade-offs between speed and correctness — a fast model that scores low or a slow model that barely edges out a quicker one.
+                      </Text>
+
+                      <HStack spacing={2} wrap="wrap" justify="space-between">
+                        <HStack spacing={2}>
+                          <Button size="xs" variant={activeAccVsTimeView === "table" ? "solid" : "outline"} colorScheme="cyan" onClick={() => setActiveAccVsTimeView("table")}>Table</Button>
+                          <Button size="xs" variant={activeAccVsTimeView === "charts" ? "solid" : "outline"} colorScheme="cyan" onClick={() => setActiveAccVsTimeView("charts")}>Chart</Button>
+                        </HStack>
+                        {activeAccVsTimeView === "table" ? (
+                          <Button size="xs" colorScheme="cyan" variant="outline" onClick={exportAccVsTimeTable} isDisabled={trialResults.length === 0}>Export Table</Button>
+                        ) : (
+                          <Menu>
+                            <MenuButton as={Button} size="xs" colorScheme="cyan" variant="outline" rightIcon={<ChevronDownIcon />}>Export Chart</MenuButton>
+                            <MenuList>
+                              <MenuItem onClick={() => exportChartById('acc-vs-time-chart', 'png', 'accuracy_vs_response_time')} fontSize="sm">Export as PNG</MenuItem>
+                              <MenuItem onClick={() => exportChartById('acc-vs-time-chart', 'svg', 'accuracy_vs_response_time')} fontSize="sm">Export as SVG</MenuItem>
+                            </MenuList>
+                          </Menu>
+                        )}
+                      </HStack>
+
+                      {activeAccVsTimeView === "table" && (
+                        <Box overflowX="auto">
+                          <Table size="sm" variant="simple" sx={{ '& tbody tr:last-child td': { borderBottom: 'none' } }}>
+                            <Thead>
+                              <Tr>
+                                <Th borderBottom="2px" whiteSpace="nowrap">Model</Th>
+                                <Th borderBottom="2px" textAlign="center" whiteSpace="nowrap">Overall Accuracy (%)</Th>
+                                <Th borderBottom="2px" textAlign="center" whiteSpace="nowrap">Avg Response Time (ms)</Th>
+                                <Th borderBottom="2px" textAlign="center" whiteSpace="nowrap">Questions Evaluated</Th>
+                              </Tr>
+                            </Thead>
+                            <Tbody>
+                              {rows.map((r, i) => (
+                                <Tr key={r.model}>
+                                  <Td fontWeight="medium" whiteSpace="nowrap">
+                                    <HStack spacing={2}>
+                                      <Box w={2} h={2} borderRadius="full" bg={PERF_COLORS[i % PERF_COLORS.length]} flexShrink={0} />
+                                      <Text>{r.model}</Text>
+                                    </HStack>
+                                  </Td>
+                                  <Td textAlign="center" fontWeight="semibold" color={r.acc >= 70 ? "green.600" : r.acc >= 50 ? "orange.500" : "red.500"}>
+                                    {r.acc.toFixed(1)}%
+                                  </Td>
+                                  <Td textAlign="center">{r.avgTimeMs.toFixed(0)}</Td>
+                                  <Td textAlign="center">{r.total}</Td>
+                                </Tr>
+                              ))}
+                            </Tbody>
+                          </Table>
+                        </Box>
+                      )}
+
+                      {activeAccVsTimeView === "charts" && (
+                        <Box id="acc-vs-time-chart">
+                          <Scatter data={scatterData} options={scatterOptions} />
+                        </Box>
+                      )}
+
+                      {insightText && (
+                        <Box bg="cyan.50" borderRadius="md" p={3} borderWidth="1px" borderColor="cyan.100">
+                          <Text fontSize="xs" fontWeight="semibold" color="cyan.700" mb={1}>Key Insights</Text>
+                          <Text fontSize="xs" color="gray.700">{insightText}</Text>
+                        </Box>
+                      )}
+                    </VStack>
+                  </Box>
+                );
+              })()}
+
+              {/* Performance: Prompt Length vs Response Time */}
+              {activeResultTab === "summary" && trialResults.length > 0 && (() => {
+                const PERF_COLORS = ['#3182CE','#38A169','#DD6B20','#805AD5','#D53F8C','#319795','#744210','#1A365D','#276749','#702459'];
+                const PERF_COLORS_BG = ['rgba(49,130,206,0.75)','rgba(56,161,105,0.75)','rgba(221,107,32,0.75)','rgba(128,90,213,0.75)','rgba(213,63,140,0.75)','rgba(49,151,149,0.75)','rgba(116,66,16,0.75)','rgba(26,54,93,0.75)','rgba(39,103,73,0.75)','rgba(112,36,89,0.75)'];
+
+                type PerfRow = { model: string; avgTokens: number; avgTimeMs: number; count: number };
+                const perfRows: PerfRow[] = selectedModels.map(model => {
+                  let totalTokens = 0, totalTime = 0, count = 0;
+                  trialResults.forEach(qResult => {
+                    const mr = qResult.modelResults[model.id];
+                    if (!mr?.trial1 || mr.trial1.aborted) return;
+                    totalTokens += estimateTokenCount(qResult.question);
+                    totalTime += mr.trial1.time;
+                    count++;
+                  });
+                  return { model: model.name, avgTokens: count > 0 ? totalTokens / count : 0, avgTimeMs: count > 0 ? totalTime / count : 0, count };
+                }).filter(r => r.count > 0);
+
+                // Overview scatter: one dataset per model, single point (avgTokens, avgTimeMs)
+                const overviewData = {
+                  datasets: perfRows.map((r, i) => ({
+                    label: r.model,
+                    data: [{ x: Math.round(r.avgTokens), y: Math.round(r.avgTimeMs) }],
+                    backgroundColor: PERF_COLORS_BG[i % PERF_COLORS_BG.length],
+                    borderColor: PERF_COLORS[i % PERF_COLORS.length],
+                    pointRadius: 10,
+                    pointHoverRadius: 13,
+                    pointStyle: 'circle' as const,
+                    borderWidth: 2,
+                  }))
+                };
+                const overviewOptions: ChartOptions<'scatter'> = {
+                  responsive: true,
+                  plugins: {
+                    legend: { position: 'bottom', labels: { usePointStyle: true, pointStyle: 'circle' } },
+                    tooltip: {
+                      callbacks: {
+                        label: (ctx) => {
+                          const r = perfRows[ctx.datasetIndex];
+                          return ` ${r.model}: ${ctx.parsed.x} tokens, ${ctx.parsed.y} ms`;
+                        }
+                      }
+                    }
+                  },
+                  scales: {
+                    x: { title: { display: true, text: 'Avg Prompt Length (tokens)' }, beginAtZero: false },
+                    y: { title: { display: true, text: 'Avg Response Time (ms)' }, beginAtZero: true }
+                  }
+                };
+
+                // Per-model scatter: one dataset = one model, points = questions
+                const perModelCharts = selectedModels.map((model, mi) => {
+                  const pts = trialResults
+                    .filter(qResult => {
+                      const mr = qResult.modelResults[model.id];
+                      return mr?.trial1 && !mr.trial1.aborted;
+                    })
+                    .map(qResult => ({
+                      x: estimateTokenCount(qResult.question),
+                      y: qResult.modelResults[model.id].trial1.time,
+                      id: qResult.questionId,
+                    }));
+                  const data = {
+                    datasets: [{
+                      label: model.name,
+                      data: pts,
+                      backgroundColor: PERF_COLORS_BG[mi % PERF_COLORS_BG.length],
+                      borderColor: PERF_COLORS[mi % PERF_COLORS.length],
+                      pointRadius: 5,
+                      pointHoverRadius: 7,
+                      borderWidth: 1.5,
+                    }]
+                  };
+                  const opts: ChartOptions<'scatter'> = {
+                    responsive: true,
+                    plugins: {
+                      legend: { display: false },
+                      tooltip: {
+                        callbacks: {
+                          label: (ctx) => {
+                            const pt = pts[ctx.dataIndex];
+                            return ` Q${pt.id}: ${ctx.parsed.x} tokens, ${ctx.parsed.y} ms`;
+                          }
+                        }
+                      }
+                    },
+                    scales: {
+                      x: { title: { display: true, text: 'Prompt Length (tokens)' }, beginAtZero: false },
+                      y: { title: { display: true, text: 'Response Time (ms)' }, beginAtZero: true }
+                    }
+                  };
+                  return { model, data, opts, pts };
+                }).filter(c => c.pts.length > 0);
+
+                // Key Insights
+                const sortedByTime = [...perfRows].sort((a, b) => b.avgTimeMs - a.avgTimeMs);
+                const slowest = sortedByTime[0];
+                const fastest = sortedByTime[sortedByTime.length - 1];
+                const sortedByLen = [...perfRows].sort((a, b) => b.avgTokens - a.avgTokens);
+                const longestQ = sortedByLen[0];
+                const shortestQ = sortedByLen[sortedByLen.length - 1];
+                const insightText = perfRows.length > 1
+                  ? `${slowest.model} had the slowest avg response (${slowest.avgTimeMs.toFixed(0)} ms), while ${fastest.model} was fastest (${fastest.avgTimeMs.toFixed(0)} ms). ${longestQ.model} answered the longest prompts on avg (${longestQ.avgTokens.toFixed(0)} tokens) vs ${shortestQ.model} (${shortestQ.avgTokens.toFixed(0)} tokens).`
+                  : perfRows.length === 1
+                    ? `${perfRows[0].model}: avg prompt ${perfRows[0].avgTokens.toFixed(0)} tokens, avg response time ${perfRows[0].avgTimeMs.toFixed(0)} ms.`
+                    : '';
+
+                return (
+                  <Box mt={8}>
+                    <Text fontSize="lg" fontWeight="bold" mb={2}>Prompt Length &amp; Response Time</Text>
+                    <VStack align="stretch" spacing={4}>
+                      <Text fontSize="sm" color="gray.600">
+                        Compares the average prompt length (in estimated tokens) and average response time (in milliseconds) for each model across all evaluated questions. The per-model scatter plots show individual question lengths vs. response times to reveal any correlation.
+                      </Text>
+
+                      {/* View toggle */}
+                      <HStack spacing={2} wrap="wrap" justify="space-between">
+                        <HStack spacing={2}>
+                          <Button size="xs" variant={activePerformanceView === "table" ? "solid" : "outline"} colorScheme="green" onClick={() => setActivePerformanceView("table")}>Table</Button>
+                          <Button size="xs" variant={activePerformanceView === "overview" ? "solid" : "outline"} colorScheme="green" onClick={() => setActivePerformanceView("overview")}>Overview Chart</Button>
+                          <Button size="xs" variant={activePerformanceView === "per-model" ? "solid" : "outline"} colorScheme="green" onClick={() => setActivePerformanceView("per-model")}>Per-Model Charts</Button>
+                        </HStack>
+                        {activePerformanceView === "table" && (
+                          <Button size="xs" colorScheme="green" variant="outline" onClick={exportPerformanceTable} isDisabled={trialResults.length === 0}>Export Table</Button>
+                        )}
+                        {activePerformanceView === "overview" && (
+                          <Menu>
+                            <MenuButton as={Button} size="xs" colorScheme="green" variant="outline" rightIcon={<ChevronDownIcon />}>Export Chart</MenuButton>
+                            <MenuList>
+                              <MenuItem onClick={() => exportChartById('perf-overview-chart', 'png', 'performance_overview')} fontSize="sm">Export as PNG</MenuItem>
+                              <MenuItem onClick={() => exportChartById('perf-overview-chart', 'svg', 'performance_overview')} fontSize="sm">Export as SVG</MenuItem>
+                            </MenuList>
+                          </Menu>
+                        )}
+                      </HStack>
+
+                      {/* Table view */}
+                      {activePerformanceView === "table" && (
+                        <Box overflowX="auto">
+                          <Table size="sm" variant="simple" sx={{ '& tbody tr:last-child td': { borderBottom: 'none' } }}>
+                            <Thead>
+                              <Tr>
+                                <Th borderBottom="2px" whiteSpace="nowrap">Model</Th>
+                                <Th borderBottom="2px" textAlign="center" whiteSpace="nowrap">Avg Prompt Length (tokens)</Th>
+                                <Th borderBottom="2px" textAlign="center" whiteSpace="nowrap">Avg Response Time (ms)</Th>
+                                <Th borderBottom="2px" textAlign="center" whiteSpace="nowrap">Questions Evaluated</Th>
+                              </Tr>
+                            </Thead>
+                            <Tbody>
+                              {perfRows.map(r => (
+                                <Tr key={r.model}>
+                                  <Td fontWeight="medium" whiteSpace="nowrap">{r.model}</Td>
+                                  <Td textAlign="center">{r.avgTokens.toFixed(1)}</Td>
+                                  <Td textAlign="center">{r.avgTimeMs.toFixed(0)}</Td>
+                                  <Td textAlign="center">{r.count}</Td>
+                                </Tr>
+                              ))}
+                            </Tbody>
+                          </Table>
+                        </Box>
+                      )}
+
+                      {/* Overview scatter chart */}
+                      {activePerformanceView === "overview" && (
+                        <Box id="perf-overview-chart">
+                          <Scatter data={overviewData} options={overviewOptions} />
+                        </Box>
+                      )}
+
+                      {/* Per-model scatter charts */}
+                      {activePerformanceView === "per-model" && (
+                        <Box>
+                          <Box display="grid" gridTemplateColumns="1fr" gap={6}>
+                            {perModelCharts.map(({ model, data, opts }) => (
+                              <Box key={model.id} id={`perf-model-chart-${model.id}`} p={3} borderWidth="1px" borderRadius="md" borderColor="gray.200">
+                                <HStack justify="space-between" mb={2}>
+                                  <Text fontSize="sm" fontWeight="semibold">{model.name}</Text>
+                                  <Menu>
+                                    <MenuButton as={Button} size="xs" colorScheme="green" variant="outline" rightIcon={<ChevronDownIcon />}>Export Chart</MenuButton>
+                                    <MenuList>
+                                      <MenuItem onClick={() => exportChartById(`perf-model-chart-${model.id}`, 'png', `performance_${model.name.replace(/\s+/g, '_')}`)} fontSize="sm">Export as PNG</MenuItem>
+                                      <MenuItem onClick={() => exportChartById(`perf-model-chart-${model.id}`, 'svg', `performance_${model.name.replace(/\s+/g, '_')}`)} fontSize="sm">Export as SVG</MenuItem>
+                                    </MenuList>
+                                  </Menu>
+                                </HStack>
+                                <Scatter data={data} options={opts} />
+                              </Box>
+                            ))}
+                          </Box>
+                        </Box>
+                      )}
+
+                      {/* Key Insights */}
+                      {insightText && (
+                        <Box bg="green.50" borderRadius="md" p={3} borderWidth="1px" borderColor="green.100">
+                          <Text fontSize="xs" fontWeight="semibold" color="green.700" mb={1}>Key Insights</Text>
+                          <Text fontSize="xs" color="gray.700">{insightText}</Text>
+                        </Box>
+                      )}
                     </VStack>
                   </Box>
                 );
