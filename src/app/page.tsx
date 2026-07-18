@@ -61,6 +61,20 @@ import {
   MenuButton,
   MenuList,
   MenuItem,
+  Tabs,
+  TabList,
+  Tab,
+  TabPanels,
+  TabPanel,
+  Modal,
+  ModalOverlay,
+  ModalContent,
+  ModalHeader,
+  ModalBody,
+  ModalFooter,
+  ModalCloseButton,
+  Badge,
+  Divider,
 } from "@chakra-ui/react";
 
 type Provider = "openai" | "deepseek" | "claude" | "ollama" | "openwebui";
@@ -132,7 +146,33 @@ interface TrialResult {
   correct: boolean;
   tokens: number;
   time: number; // in milliseconds
-  aborted?: boolean; // Flag to indicate if this trial was aborted
+  aborted?: boolean;
+  needsReview?: boolean;  // response didn't follow format — awaiting manual answer selection
+  rawResponse?: string;   // stored so the review modal can display it
+  wasReviewed?: boolean;  // answer was manually corrected via the review panel
+  originalAnswer?: string; // model's raw parsed answer before review correction
+}
+
+interface BatchReviewQuestion {
+  questionIndex: number;
+  question: string;
+  correctAnswer: string;
+  parsedAnswer: string; // model's parsed answer; '?' if it needs review
+  needsReview: boolean;
+  addIdx: number;       // index inside additionalTrials[]
+}
+
+interface ReviewItem {
+  id: string;
+  modelId: string;
+  modelName: string;
+  questionIndex: number;
+  question: string;
+  rawResponse: string;
+  correctAnswer: string;
+  trialKey: string; // 'trial1' | 'trial2' | 'trial3' | 'additional_N' | 'batch'
+  trialNumber?: number;         // for batch items only
+  batchQuestions?: BatchReviewQuestion[]; // present only for extended-trial batch items
 }
 
 interface QuestionResult {
@@ -176,7 +216,12 @@ export default function Home() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [questionCount, setQuestionCount] = useState<number>(0);
-  const [systemPrompt, setSystemPrompt] = useState("Output only uppercase letter answers in numbered order, one per line, exactly in the format \"1. A\". No extra text, explanations, symbols, or blank lines allowed. Maintain original question order.");
+  const [systemPrompt, setSystemPrompt] = useState("Answer with only the single correct option letter (A, B, C, or D). For multiple questions, use a numbered list:\n1. A\n2. B\nNo explanation or extra text.");
+  const [reviewQueue, setReviewQueue] = useState<ReviewItem[]>([]);
+  const [reviewModalOpen, setReviewModalOpen] = useState(false);
+  const [reviewModalIndex, setReviewModalIndex] = useState(0);
+  // batchAnswers[itemId][questionIndex] = selected letter — tracks in-progress batch selections
+  const [batchAnswers, setBatchAnswers] = useState<Record<string, Record<number, string>>>({});
   const [results, setResults] = useState<EvaluationResult[]>([]);
   const [trialResults, setTrialResults] = useState<QuestionResult[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -190,7 +235,7 @@ export default function Home() {
     parsedQuestions: Array<{id: string, question: string, answer: string, class?: string}>;
     trialResultsArray: QuestionResult[];
     currentModelIndex: number;
-    currentPhase: 'trial1' | 'trial2' | 'trial3' | 'inconsistent';
+    currentPhase: 'trial1' | 'trial2' | 'trial3' | 'waiting_review' | 'inconsistent';
     currentQuestionIndex: number;
     currentTrialNumber: number;
     inconsistentQuestions: Array<{index: number, modelId: string}>;
@@ -537,6 +582,85 @@ export default function Home() {
     };
   };
 
+  const resolveReview = (item: ReviewItem, chosenAnswer: string) => {
+    const upper = chosenAnswer.toUpperCase();
+    setTrialResults(prev => prev.map((qResult, qi) => {
+      if (qi !== item.questionIndex) return qResult;
+      const modelResult = qResult.modelResults[item.modelId];
+      if (!modelResult) return qResult;
+      const patch = (t: TrialResult | undefined): TrialResult | undefined =>
+        t ? { ...t, originalAnswer: t.answer, answer: upper, correct: upper === item.correctAnswer.toUpperCase(), needsReview: false, rawResponse: undefined, wasReviewed: true } : t;
+      if (item.trialKey === 'trial1') return { ...qResult, modelResults: { ...qResult.modelResults, [item.modelId]: { ...modelResult, trial1: patch(modelResult.trial1)! } } };
+      if (item.trialKey === 'trial2') return { ...qResult, modelResults: { ...qResult.modelResults, [item.modelId]: { ...modelResult, trial2: patch(modelResult.trial2) } } };
+      if (item.trialKey === 'trial3') return { ...qResult, modelResults: { ...qResult.modelResults, [item.modelId]: { ...modelResult, trial3: patch(modelResult.trial3) } } };
+      if (item.trialKey.startsWith('additional_')) {
+        const addIdx = parseInt(item.trialKey.replace('additional_', ''));
+        const additionalTrials = [...(modelResult.additionalTrials || [])];
+        additionalTrials[addIdx] = patch(additionalTrials[addIdx])!;
+        const updatedModelResult = { ...modelResult, additionalTrials };
+        // Recalculate correctPercentage now that this trial has a real answer
+        const allTrials = [updatedModelResult.trial1, updatedModelResult.trial2, updatedModelResult.trial3, ...additionalTrials].filter(Boolean) as TrialResult[];
+        if (allTrials.length > 0) {
+          updatedModelResult.correctPercentage = (allTrials.filter(t => !t.aborted && t.correct).length / allTrials.length) * 100;
+        }
+        return { ...qResult, modelResults: { ...qResult.modelResults, [item.modelId]: updatedModelResult } };
+      }
+      return qResult;
+    }));
+    setReviewQueue(prev => {
+      const next = prev.filter(r => r.id !== item.id);
+      setReviewModalIndex(i => Math.min(i, Math.max(0, next.length - 1)));
+      return next;
+    });
+  };
+
+  const resolveBatchReview = (item: ReviewItem, answers: Record<number, string>) => {
+    if (!item.batchQuestions) return;
+    const patchTrial = (t: TrialResult | undefined, upper: string, correctAnswer: string): TrialResult | undefined =>
+      t ? { ...t, originalAnswer: t.answer, answer: upper, correct: upper === correctAnswer.toUpperCase(), needsReview: false, rawResponse: undefined, wasReviewed: true } : t;
+
+    setTrialResults(prev => prev.map((qResult, qi) => {
+      const batchQ = item.batchQuestions!.find(bq => bq.questionIndex === qi);
+      if (!batchQ) return qResult;
+      const upper = (answers[qi] ?? (!batchQ.needsReview ? batchQ.parsedAnswer : '')).toUpperCase();
+      if (!upper) return qResult;
+      const isOverride = !batchQ.needsReview && answers[qi] !== undefined && answers[qi] !== batchQ.parsedAnswer;
+      if (!batchQ.needsReview && !isOverride) return qResult;
+      const modelResult = qResult.modelResults[item.modelId];
+      if (!modelResult) return qResult;
+
+      let updatedModelResult = { ...modelResult };
+      if (item.trialKey === 'trial2') {
+        updatedModelResult.trial2 = patchTrial(modelResult.trial2, upper, batchQ.correctAnswer);
+      } else if (item.trialKey === 'trial3') {
+        updatedModelResult.trial3 = patchTrial(modelResult.trial3, upper, batchQ.correctAnswer);
+      } else {
+        const additionalTrials = [...(modelResult.additionalTrials || [])];
+        additionalTrials[batchQ.addIdx] = patchTrial(additionalTrials[batchQ.addIdx], upper, batchQ.correctAnswer)!;
+        updatedModelResult = { ...modelResult, additionalTrials };
+        const allTrials = [updatedModelResult.trial1, updatedModelResult.trial2, updatedModelResult.trial3, ...additionalTrials].filter(Boolean) as TrialResult[];
+        if (allTrials.length > 0) {
+          updatedModelResult.correctPercentage = (allTrials.filter(t => !t.aborted && t.correct).length / allTrials.length) * 100;
+        }
+      }
+      return { ...qResult, modelResults: { ...qResult.modelResults, [item.modelId]: updatedModelResult } };
+    }));
+    setBatchAnswers(prev => { const next = { ...prev }; delete next[item.id]; return next; });
+    setReviewQueue(prev => {
+      const next = prev.filter(r => r.id !== item.id);
+      setReviewModalIndex(i => Math.min(i, Math.max(0, next.length - 1)));
+      return next;
+    });
+  };
+
+  const skipReview = (item: ReviewItem) => {
+    setReviewQueue(prev => {
+      const next = prev.filter(r => r.id !== item.id);
+      setReviewModalIndex(i => Math.min(i, Math.max(0, next.length - 1)));
+      return next;
+    });
+  };
+
   // Trial-based evaluation function
   const stopEvaluation = () => {
     // If already paused, stop immediately without showing "Stopping..."
@@ -549,6 +673,8 @@ export default function Home() {
       shouldPauseRef.current = false;
       shouldStopRef.current = false;
       setEvaluationState(null);
+      setReviewQueue([]);
+      setBatchAnswers({});
       
       toast({
         title: "Evaluation Stopped",
@@ -606,9 +732,16 @@ export default function Home() {
     shouldPauseRef.current = false;
     setIsEvaluating(true);
     setIsProcessing(true);
-    
+
+    // Always sync trialResultsArray from React state so any reviews resolved while
+    // paused (answers, correct flags, correctPercentage) are visible to the loop.
+    const stateToResume = {
+      ...evaluationState,
+      trialResultsArray: trialResults.map(qr => ({ ...qr, modelResults: { ...qr.modelResults } })),
+    };
+
     // Continue evaluation from saved state
-    runEvaluationLoop(evaluationState);
+    runEvaluationLoop(stateToResume);
     
     toast({
       title: "Resuming Evaluation",
@@ -623,7 +756,7 @@ export default function Home() {
     parsedQuestions: Array<{id: string, question: string, answer: string, class?: string}>;
     trialResultsArray: QuestionResult[];
     currentModelIndex: number;
-    currentPhase: 'trial1' | 'trial2' | 'trial3' | 'inconsistent';
+    currentPhase: 'trial1' | 'trial2' | 'trial3' | 'waiting_review' | 'inconsistent';
     currentQuestionIndex: number;
     currentTrialNumber: number;
     inconsistentQuestions: Array<{index: number, modelId: string}>;
@@ -717,6 +850,16 @@ export default function Home() {
                 trialResultsArray[i].modelResults[model.id].trial1 = trialResult;
               }
 
+              if (trialResult.needsReview) {
+                setReviewQueue(prev => [...prev, {
+                  id: `${model.id}-${q.id}-trial1`,
+                  modelId: model.id, modelName: model.name,
+                  questionIndex: i, question: q.question,
+                  rawResponse: trialResult.rawResponse!, correctAnswer: q.answer,
+                  trialKey: 'trial1',
+                }]);
+              }
+
               setProgress(prev => ({ ...prev, current: prev.current + 1 }));
               setTrialResults([...trialResultsArray]);
             } catch (error) {
@@ -792,6 +935,29 @@ export default function Home() {
               }
               setProgress(prev => ({ ...prev, current: prev.current + 1 }));
             });
+            // One batch review item per chunk of 10 questions
+            const batchSize2 = 10;
+            for (let bStart = 0; bStart < parsedQuestions.length; bStart += batchSize2) {
+              const bEnd = Math.min(bStart + batchSize2, parsedQuestions.length);
+              const chunk = trial2Results.slice(bStart, bEnd);
+              if (chunk.some(r => r.needsReview)) {
+                const rawResponse = chunk.find(r => r.rawResponse)?.rawResponse || '';
+                setReviewQueue(prev => [...prev, {
+                  id: `${model.id}-trial2-batch${bStart}`,
+                  modelId: model.id, modelName: model.name,
+                  questionIndex: bStart, question: '', rawResponse, correctAnswer: '',
+                  trialKey: 'trial2', trialNumber: 2,
+                  batchQuestions: chunk.map((result, bIdx) => ({
+                    questionIndex: bStart + bIdx,
+                    question: parsedQuestions[bStart + bIdx].question,
+                    correctAnswer: parsedQuestions[bStart + bIdx].answer,
+                    parsedAnswer: result.answer,
+                    needsReview: result.needsReview || false,
+                    addIdx: -1,
+                  })),
+                }]);
+              }
+            }
             setTrialResults([...trialResultsArray]);
           } catch (error) {
             // Handle error by pausing
@@ -865,6 +1031,29 @@ export default function Home() {
               }
               setProgress(prev => ({ ...prev, current: prev.current + 1 }));
             });
+            // One batch review item per chunk of 10 questions
+            const batchSize3 = 10;
+            for (let bStart = 0; bStart < parsedQuestions.length; bStart += batchSize3) {
+              const bEnd = Math.min(bStart + batchSize3, parsedQuestions.length);
+              const chunk = trial3Results.slice(bStart, bEnd);
+              if (chunk.some(r => r.needsReview)) {
+                const rawResponse = chunk.find(r => r.rawResponse)?.rawResponse || '';
+                setReviewQueue(prev => [...prev, {
+                  id: `${model.id}-trial3-batch${bStart}`,
+                  modelId: model.id, modelName: model.name,
+                  questionIndex: bStart, question: '', rawResponse, correctAnswer: '',
+                  trialKey: 'trial3', trialNumber: 3,
+                  batchQuestions: chunk.map((result, bIdx) => ({
+                    questionIndex: bStart + bIdx,
+                    question: parsedQuestions[bStart + bIdx].question,
+                    correctAnswer: parsedQuestions[bStart + bIdx].answer,
+                    parsedAnswer: result.answer,
+                    needsReview: result.needsReview || false,
+                    addIdx: -1,
+                  })),
+                }]);
+              }
+            }
             setTrialResults([...trialResultsArray]);
           } catch (error) {
             // Handle error by pausing
@@ -894,10 +1083,43 @@ export default function Home() {
           }
         }
 
+        // After trial3: if any of this model's trial1/2/3 answers are still pending review,
+        // pause and wait — inconsistency detection needs the resolved answers.
+        if (currentPhase === 'trial3') {
+          const hasPendingReviews = trialResultsArray.some(qResult => {
+            const mr = qResult.modelResults[model.id];
+            if (!mr) return false;
+            return [mr.trial1, mr.trial2, mr.trial3].some(t => t?.needsReview);
+          });
+          if (hasPendingReviews) {
+            setIsPaused(true);
+            setIsEvaluating(false);
+            setIsProcessing(false);
+            setEvaluationState({
+              parsedQuestions,
+              trialResultsArray,
+              currentModelIndex: modelIdx,
+              currentPhase: 'waiting_review',
+              currentQuestionIndex: 0,
+              currentTrialNumber,
+              inconsistentQuestions,
+            });
+            toast({
+              title: "Review Required Before Continuing",
+              description: "Resolve all pending answers in the Review panel, then click Resume to run extended trials.",
+              status: "warning",
+              duration: 8000,
+              isClosable: true,
+            });
+            return;
+          }
+        }
+
         // After trial3: detect inconsistencies for THIS model and run extended trials.
-        // Runs on a fresh pass (currentPhase === 'trial3') or when resuming mid-extended-trials
+        // Runs on a fresh pass (currentPhase === 'trial3'), after review resolution
+        // (currentPhase === 'waiting_review'), or when resuming mid-extended-trials
         // for this specific model (currentPhase === 'inconsistent' && modelIdx === currentModelIndex).
-        if (currentPhase === 'trial3' || (currentPhase === 'inconsistent' && modelIdx === currentModelIndex)) {
+        if (currentPhase === 'trial3' || currentPhase === 'waiting_review' || (currentPhase === 'inconsistent' && modelIdx === currentModelIndex)) {
           const isResumingInconsistent = currentPhase === 'inconsistent';
           const modelInconsistentQuestions: Array<{index: number, question: {id: string, question: string, answer: string}}> = [];
 
@@ -968,13 +1190,35 @@ export default function Home() {
                   trialNum,
                   controller.signal
                 );
+                // Track addIdx per question before pushing, then push all results
+                const batchAddIdxMap: number[] = [];
                 trialResults.forEach((result, idx) => {
                   const questionIndex = modelInconsistentQuestions[idx].index;
                   if (!trialResultsArray[questionIndex].modelResults[model.id].additionalTrials) {
                     trialResultsArray[questionIndex].modelResults[model.id].additionalTrials = [];
                   }
+                  batchAddIdxMap.push(trialResultsArray[questionIndex].modelResults[model.id].additionalTrials!.length);
                   trialResultsArray[questionIndex].modelResults[model.id].additionalTrials!.push(result);
                 });
+                // If any question needs review, add ONE batch review item with all questions
+                if (trialResults.some(r => r.needsReview)) {
+                  const rawResponse = trialResults.find(r => r.rawResponse)?.rawResponse || '';
+                  setReviewQueue(prev => [...prev, {
+                    id: `${model.id}-trial${trialNum}-batch-${Date.now()}`,
+                    modelId: model.id, modelName: model.name,
+                    questionIndex: modelInconsistentQuestions[0].index,
+                    question: '', rawResponse, correctAnswer: '',
+                    trialKey: 'batch', trialNumber: trialNum,
+                    batchQuestions: modelInconsistentQuestions.map((q, idx) => ({
+                      questionIndex: q.index,
+                      question: q.question.question,
+                      correctAnswer: q.question.answer,
+                      parsedAnswer: trialResults[idx].answer,
+                      needsReview: trialResults[idx].needsReview || false,
+                      addIdx: batchAddIdxMap[idx],
+                    })),
+                  }]);
+                }
                 setProgress(prev => ({ ...prev, current: prev.current + 1 }));
                 setTrialResults([...trialResultsArray]);
               } catch (error) {
@@ -1017,6 +1261,35 @@ export default function Home() {
                 }
               }
               setTrialResults([...trialResultsArray]);
+
+              // Pause if any extended trial answers are still pending review.
+              // On resume, trialResultsArray is re-synced from React state so resolved
+              // answers and the recalculated correctPercentage are picked up.
+              const hasPendingExtendedReviews = modelInconsistentQuestions.some(({ index }) =>
+                (trialResultsArray[index].modelResults[model.id].additionalTrials || []).some(t => t?.needsReview)
+              );
+              if (hasPendingExtendedReviews) {
+                setIsPaused(true);
+                setIsEvaluating(false);
+                setIsProcessing(false);
+                setEvaluationState({
+                  parsedQuestions,
+                  trialResultsArray,
+                  currentModelIndex: modelIdx + 1,
+                  currentPhase: 'trial1',
+                  currentQuestionIndex: 0,
+                  currentTrialNumber: 4,
+                  inconsistentQuestions,
+                });
+                toast({
+                  title: "Review Required Before Continuing",
+                  description: "Resolve all pending answers in the Review panel, then click Resume.",
+                  status: "warning",
+                  duration: 8000,
+                  isClosable: true,
+                });
+                return;
+              }
             }
           }
         }
@@ -1055,6 +1328,10 @@ export default function Home() {
       setIsPaused(false);
       setEvaluationState(null);
       setAbortController(null);
+      if (wasStopped || controller.signal.aborted) {
+        setReviewQueue([]);
+        setBatchAnswers({});
+      }
     } catch (error) {
       setIsEvaluating(false);
       setIsProcessing(false);
@@ -1102,9 +1379,27 @@ export default function Home() {
           `${model.name} - Tokens`,
           `${model.name} - TTFT (ms)`,
           `${model.name} - T1`,
+          `${model.name} - T1 Corrected`,
           `${model.name} - T2`,
+          `${model.name} - T2 Corrected`,
           `${model.name} - T3`,
-          `${model.name} - % of 10`
+          `${model.name} - T3 Corrected`,
+          `${model.name} - T4`,
+          `${model.name} - T4 Corrected`,
+          `${model.name} - T5`,
+          `${model.name} - T5 Corrected`,
+          `${model.name} - T6`,
+          `${model.name} - T6 Corrected`,
+          `${model.name} - T7`,
+          `${model.name} - T7 Corrected`,
+          `${model.name} - T8`,
+          `${model.name} - T8 Corrected`,
+          `${model.name} - T9`,
+          `${model.name} - T9 Corrected`,
+          `${model.name} - T10`,
+          `${model.name} - T10 Corrected`,
+          `${model.name} - % of 10 (raw)`,
+          `${model.name} - % of 10 (corrected)`
         );
       });
       csv += headerRow.map(h => `"${h}"`).join(',') + '\n';
@@ -1125,17 +1420,35 @@ export default function Home() {
         
         selectedModels.forEach(model => {
           const modelResult = result.modelResults[model.id];
+          // orig: what the model returned before any review; corr: the manually chosen answer (or '-')
+          const orig = (t?: TrialResult) => (t ? (t.wasReviewed ? (t.originalAnswer ?? '?') : t.answer) : '-') || '-';
+          const corr = (t?: TrialResult) => (t?.wasReviewed ? t.answer : '-') || '-';
           if (modelResult) {
+            const additional = modelResult.additionalTrials || [];
             row.push(
               modelResult.trial1?.tokens || '-',
               modelResult.trial1?.time || '-',
-              modelResult.trial1?.answer || '-',
-              modelResult.trial2?.answer || '-',
-              modelResult.trial3?.answer || '-',
+              orig(modelResult.trial1), corr(modelResult.trial1),
+              orig(modelResult.trial2), corr(modelResult.trial2),
+              orig(modelResult.trial3), corr(modelResult.trial3),
+              orig(additional[0]), corr(additional[0]),
+              orig(additional[1]), corr(additional[1]),
+              orig(additional[2]), corr(additional[2]),
+              orig(additional[3]), corr(additional[3]),
+              orig(additional[4]), corr(additional[4]),
+              orig(additional[5]), corr(additional[5]),
+              orig(additional[6]), corr(additional[6]),
+              (() => {
+                const allTrials = [modelResult.trial1, modelResult.trial2, modelResult.trial3, ...additional].filter(Boolean) as TrialResult[];
+                if (allTrials.length === 0) return '-';
+                // reviewed answers were '?' pre-review → count as wrong
+                const rawCorrect = allTrials.filter(t => !t.aborted && !t.wasReviewed && t.correct).length;
+                return `${Math.round((rawCorrect / allTrials.length) * 100)}%`;
+              })(),
               modelResult.correctPercentage !== undefined ? `${Math.round(modelResult.correctPercentage)}%` : '-'
             );
           } else {
-            row.push('-', '-', '-', '-', '-', '-');
+            row.push('-', '-', '-', '-', '-', '-', '-', '-', '-', '-', '-', '-', '-', '-', '-', '-', '-', '-', '-', '-', '-', '-', '-', '-');
           }
         });
         
@@ -2164,10 +2477,11 @@ export default function Home() {
 
   // Helper function to determine the correct API endpoint based on model type
   const getApiEndpoint = (baseUrl: string, modelId: string, provider: string): string => {
+    const base = baseUrl.replace(/\/+$/, ''); // strip trailing slashes to avoid double-slash paths
     if (provider === 'claude') {
-      return `${baseUrl}/messages`;
+      return `${base}/messages`;
     }
-    return `${baseUrl}/chat/completions`;
+    return `${base}/chat/completions`;
   };
 
   // Helper function to run a single question trial
@@ -2201,18 +2515,20 @@ export default function Home() {
       };
 
       if (isClaude) {
-        // reasoningEffort holds an effort level ("low"|"medium"|"high"|"max") or undefined for no thinking.
-        // Opus 4.7/4.8 require adaptive thinking ({type:"adaptive"}) — budget_tokens removed on those models.
-        // temperature is also removed on Opus 4.7/4.8, so never send it for Claude.
+        // Adaptive thinking: supported on opus-4-*, sonnet-4-6, 3-7-sonnet.
+        // Haiku 4.5 / Sonnet 4.5 do not support it — omit the thinking param for those.
+        // Opus 4.8 with thinking omitted or disabled writes reasoning in CAPS; adaptive keeps it internal.
+        const apiModelId = (model.apiModelId || modelId).toLowerCase();
+        const supportsAdaptiveThinking = /^claude-(opus-4|sonnet-4-6|3-7-sonnet)/.test(apiModelId);
         const effortLevel = model.reasoningEffort || null;
-        requestBody.max_tokens = effortLevel ? 16384 : 1024;
+        requestBody.max_tokens = effortLevel ? 16384 : 4096;
         requestBody.system = prompt;
         requestBody.messages = [{ role: "user", content: question }];
-        if (effortLevel) {
+        if (supportsAdaptiveThinking) {
           requestBody.thinking = { type: "adaptive" };
-          requestBody.output_config = { effort: effortLevel };
-        } else {
-          requestBody.thinking = { type: "disabled" };
+          if (effortLevel) {
+            requestBody.output_config = { effort: effortLevel };
+          }
         }
       } else if (isO1Model) {
         requestBody.messages = [
@@ -2247,7 +2563,7 @@ export default function Home() {
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
-        const errorMsg = `API request failed: ${response.statusText} - ${JSON.stringify(errorData)}`;
+        const errorMsg = `API request failed: ${response.status} ${response.statusText} - ${JSON.stringify(errorData)} [endpoint: ${endpoint}]`;
         
         // Log to API logs
         setApiLogs(prev => [...prev, {
@@ -2281,9 +2597,11 @@ export default function Home() {
         rawAnswer = data.choices[0].message.content || "";
       }
 
-      // For single questions, strip out any numbering (e.g., "1. A" -> "A")
+      // For single questions, strip leading numbering then common punctuation wrappers.
+      // e.g. "1. B" → "B", "(B)" → "B", "B." → "B", "B)" → "B"
       let cleanedAnswer = rawAnswer.trim();
       cleanedAnswer = cleanedAnswer.replace(/^\s*\d+[.)\-:]\s*/g, '');
+      cleanedAnswer = cleanedAnswer.replace(/^[\s(]*([A-Ea-e])[\s.)]*$/i, '$1');
       const answer = cleanedAnswer.trim().toUpperCase();
       const duration = Date.now() - startTime;
 
@@ -2343,11 +2661,15 @@ export default function Home() {
         showFullRequest: false,
       }]);
 
+      // Flag for manual review when the answer isn't a clean single letter A-E
+      const needsReview = rawAnswer.length > 0 && !/^[A-Ea-e]$/.test(answer);
       return {
-        answer,
-        correct: answer === correctAnswer.toUpperCase(),
+        answer: needsReview ? '?' : answer,
+        correct: needsReview ? false : answer === correctAnswer.toUpperCase(),
         tokens,
-        time: duration
+        time: duration,
+        needsReview,
+        rawResponse: needsReview ? rawAnswer : undefined,
       };
     } catch (error) {
       const duration = Date.now() - startTime;
@@ -2433,15 +2755,17 @@ export default function Home() {
         };
 
         if (isClaude) {
+          const apiModelId = (model.apiModelId || modelId).toLowerCase();
+          const supportsAdaptiveThinking = /^claude-(opus-4|sonnet-4-6|3-7-sonnet)/.test(apiModelId);
           const effortLevel = model.reasoningEffort || null;
-          requestBody.max_tokens = effortLevel ? 32768 : 2048;
+          requestBody.max_tokens = effortLevel ? 32768 : 4096;
           requestBody.system = prompt;
           requestBody.messages = [{ role: "user", content: combinedQuestion }];
-          if (effortLevel) {
+          if (supportsAdaptiveThinking) {
             requestBody.thinking = { type: "adaptive" };
-            requestBody.output_config = { effort: effortLevel };
-          } else {
-            requestBody.thinking = { type: "disabled" };
+            if (effortLevel) {
+              requestBody.output_config = { effort: effortLevel };
+            }
           }
         } else if (isO1Model) {
           requestBody.messages = [
@@ -2452,9 +2776,7 @@ export default function Home() {
             { role: "system", content: prompt },
             { role: "user", content: combinedQuestion }
           ];
-          if (model.provider !== 'deepseek') {
-            requestBody.temperature = temperature;
-          }
+          requestBody.temperature = temperature;
           if (model.reasoningEffort && model.provider === 'openai') {
             requestBody.reasoning_effort = model.reasoningEffort;
           }
@@ -2591,11 +2913,17 @@ export default function Home() {
         
         // Create results for each question in the batch
         batch.forEach((q, idx) => {
+          const raw = answers[idx] || "ERROR";
+          // Strip punctuation wrappers before checking (e.g. "(B)" → "B", "B." → "B")
+          const parsedAnswer = raw.replace(/^[\s(]*([A-Ea-e])[\s.)]*$/i, '$1').toUpperCase() || raw;
+          const needsReview = responseText.length > 0 && !/^[A-Ea-e]$/.test(parsedAnswer);
           results.push({
-            answer: answers[idx] || "ERROR",
-            correct: (answers[idx] || "").toUpperCase() === q.answer.toUpperCase(),
-            tokens: Math.floor(totalTokens / batch.length), // Distribute tokens evenly
-            time: Math.floor(duration / batch.length) // Distribute time evenly
+            answer: needsReview ? '?' : parsedAnswer,
+            correct: needsReview ? false : parsedAnswer.toUpperCase() === q.answer.toUpperCase(),
+            tokens: Math.floor(totalTokens / batch.length),
+            time: Math.floor(duration / batch.length),
+            needsReview,
+            rawResponse: needsReview ? responseText : undefined,
           });
         });
         
@@ -3133,15 +3461,15 @@ export default function Home() {
                 });
               }
             } else if (provider === 'claude') {
-              // claude-3-7-sonnet, claude-opus-4-*, and claude-sonnet-4-* support adaptive thinking.
-              // Effort levels replace the old budget_tokens API (removed on Opus 4.7/4.8).
-              // "max" effort is Opus-only; Sonnet/Haiku cap at "high".
-              const isClaudeWithThinking = /^claude-(3-7-sonnet|opus-4|sonnet-4)/i.test(model.id);
+              // Adaptive thinking supported on opus-4-*, sonnet-4-6, 3-7-sonnet only.
+              // sonnet-4-5 and haiku-4-5 do NOT support it — excluded from this regex.
+              // "max"/"xhigh" effort is Opus-only.
+              const isClaudeWithThinking = /^claude-(3-7-sonnet|opus-4|sonnet-4-6)/i.test(model.id);
               if (isClaudeWithThinking) {
-                // No thinking — standard inference
+                // Auto: adaptive thinking with default (high) effort — no explicit output_config sent
                 providerModels.push({
                   id: baseId,
-                  name: `${model.id} (No thinking)`,
+                  name: `${model.id} (Auto)`,
                   provider,
                   apiModelId: model.id,
                 });
@@ -3184,8 +3512,9 @@ export default function Home() {
           totalModelCount += providerModels.length;
 
           // If the endpoint returned 200 but no models, the key may be wrong or the server has no models
-          if (providerModels.length === 0 && provider !== 'deepseek') {
-            const providerLabel = provider === 'openai' ? 'OpenAI' : provider === 'deepseek' ? 'DeepSeek' : provider === 'claude' ? 'Claude' : provider === 'ollama' ? 'Ollama' : 'Open WebUI';
+          if (providerModels.length === 0) {
+            const providerLabels: Record<string, string> = { openai: 'OpenAI', deepseek: 'DeepSeek', claude: 'Claude', ollama: 'Ollama', openwebui: 'Open WebUI' };
+            const providerLabel = providerLabels[provider as string] ?? provider;
             toast({
               title: `No models returned from ${providerLabel}`,
               description: `The API responded but returned 0 models. Check your API key and base URL.`,
@@ -3316,6 +3645,7 @@ export default function Home() {
   // Debug logging on every render
 
   return (
+    <>
     <Flex h="100vh">
       {/* Global loading indicator */}
       {isProcessing && (
@@ -3903,111 +4233,121 @@ export default function Home() {
           </HStack>
         </Box>
 
-        <Box 
+        <Box
           id="config"
-          p={6} 
-          borderRadius="lg" 
-          bg="white" 
-          boxShadow="lg" 
-          border="1px" 
+          p={4}
+          borderRadius="lg"
+          bg="white"
+          boxShadow="lg"
+          border="1px"
           borderColor="blue.100"
           scroll-margin-top="2rem"
         >
-          <HStack spacing={2} mb={4}>
+          <HStack spacing={2} mb={3}>
             <Box p={1.5} bg="blue.100" borderRadius="md">
               <Text fontSize="sm" color="blue.600">⚙️</Text>
             </Box>
             <Heading size="sm">LLMs Configuration</Heading>
           </HStack>
 
-          <VStack spacing={4} align="stretch">
-            <HStack spacing={8} align="flex-start">
-              <VStack spacing={4} align="stretch" flex="2">
-                <FormControl>
-                  <FormLabel fontSize="sm">Temperature: {temperature}</FormLabel>
-                  <Slider
-                    value={temperature}
-                    onChange={setTemperature}
-                    min={0}
-                    max={2}
-                    step={0.1}
-                    colorScheme="blue"
-                    size="sm"
-                  >
-                    <SliderTrack>
-                      <SliderFilledTrack />
-                    </SliderTrack>
-                    <SliderThumb />
-                  </Slider>
-                  <Text fontSize="xs" color="gray.500" mt={1}>
-                    Lower values make the output more focused and deterministic
-                  </Text>
-                </FormControl>
-
-                <Box mt={2}>
-                  <HStack spacing={3}>
-                    <Button
-                      colorScheme="blue"
-                      maxW="250px"
-                      isDisabled={(isEvaluating && !(isPaused && evaluationState)) || selectedModels.length === 0 || (!selectedFile && !(isPaused && evaluationState))}
-                      size="md"
-                      leftIcon={<TriangleUpIcon transform="rotate(90deg)" boxSize={3} />}
-                      onClick={isPaused && evaluationState ? resumeEvaluation : startEvaluation}
-                      isLoading={isEvaluating && !shouldStopEvaluation && !isPaused}
-                      loadingText="Running..."
-                    >
-                      {isPaused && evaluationState ? "Resume" : "Start Evaluation"}
-                    </Button>
-                    <Button
-                      variant="outline"
-                      colorScheme="orange"
-                      size="md"
-                      onClick={() => {
-                        pauseEvaluation();
-                      }}
-                      isDisabled={!isEvaluating || isPaused || shouldPauseEvaluation}
-                      minW="100px"
-                      _hover={{ bg: isEvaluating && !isPaused ? "orange.50" : undefined }}
-                    >
-                      {shouldPauseEvaluation ? "Pausing..." : isPaused ? "Paused" : "Pause"}
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      colorScheme="red"
-                      size="md"
-                      onClick={() => {
-                        stopEvaluation();
-                      }}
-                      isDisabled={!isEvaluating && !isPaused}
-                      opacity={(!isEvaluating && !isPaused) ? 0.3 : shouldStopEvaluation ? 0.6 : 1}
-                      minW="100px"
-                      _hover={{ bg: (isEvaluating || isPaused) ? "red.50" : undefined }}
-                    >
-                      {shouldStopEvaluation ? "Stopping..." : "Stop"}
-                    </Button>
-                  </HStack>
-                </Box>
-              </VStack>
-
-              <FormControl flex="3">
-                <FormLabel fontSize="sm">System Prompt</FormLabel>
-                <Textarea
-                  value={systemPrompt}
-                  onChange={(e) => setSystemPrompt(e.target.value)}
-                  placeholder="Enter system prompt for the AI model"
-                  rows={5}
-                  bg="gray.50"
+          <HStack spacing={6} align="flex-start">
+            {/* Left: temperature + buttons */}
+            <VStack spacing={6} align="stretch" flex="2">
+              <FormControl>
+                <HStack justify="space-between" mb={1}>
+                  <FormLabel fontSize="sm" mb={0}>Temperature</FormLabel>
+                  <Text fontSize="sm" fontWeight="semibold" color="blue.600">{temperature}</Text>
+                </HStack>
+                <Slider
+                  value={temperature}
+                  onChange={setTemperature}
+                  min={0}
+                  max={2}
+                  step={0.1}
+                  colorScheme="blue"
                   size="sm"
-                />
-              </FormControl>
-            </HStack>
-
-            <Box mt={4}>
-              {isEvaluating && (
-                <Box w="100%" maxW="300px" mt={3}>
-                  <Text fontSize="sm" color="blue.600" mb={1}>
-                    Progress: {Math.round((progress.current / progress.total) * 100)}%
+                >
+                  <SliderTrack>
+                    <SliderFilledTrack />
+                  </SliderTrack>
+                  <SliderThumb />
+                </Slider>
+                <Text fontSize="xs" color="gray.500" mt={1}>
+                  Lower values make the output more focused and deterministic
+                </Text>
+                {selectedModels.some(m =>
+                  m.provider === 'claude' ||
+                  /^(o1|o3)(-mini|-preview)?(-\d{4}-\d{2}-\d{2})?$/i.test(m.apiModelId || m.id)
+                ) && (
+                  <Text fontSize="xs" color="orange.500" mt={1}>
+                    Ignored by{' '}
+                    {selectedModels
+                      .filter(m =>
+                        m.provider === 'claude' ||
+                        /^(o1|o3)(-mini|-preview)?(-\d{4}-\d{2}-\d{2})?$/i.test(m.apiModelId || m.id)
+                      )
+                      .map(m => m.name)
+                      .join(', ')}
                   </Text>
+                )}
+              </FormControl>
+
+              <HStack spacing={3}>
+                <Button
+                  colorScheme="blue"
+                  flex="1"
+                  isDisabled={(isEvaluating && !(isPaused && evaluationState)) || selectedModels.length === 0 || (!selectedFile && !(isPaused && evaluationState))}
+                  size="md"
+                  leftIcon={<TriangleUpIcon transform="rotate(90deg)" boxSize={3} />}
+                  onClick={isPaused && evaluationState ? resumeEvaluation : startEvaluation}
+                  isLoading={isEvaluating && !shouldStopEvaluation && !isPaused}
+                  loadingText="Running..."
+                >
+                  {isPaused && evaluationState ? "Resume" : "Start Evaluation"}
+                </Button>
+                <Button
+                  variant="outline"
+                  colorScheme="orange"
+                  size="md"
+                  minW="90px"
+                  onClick={pauseEvaluation}
+                  isDisabled={!isEvaluating || isPaused || shouldPauseEvaluation}
+                  _hover={{ bg: isEvaluating && !isPaused ? "orange.50" : undefined }}
+                >
+                  {shouldPauseEvaluation ? "Pausing…" : isPaused ? "Paused" : "Pause"}
+                </Button>
+                <Button
+                  variant="ghost"
+                  colorScheme="red"
+                  size="md"
+                  minW="70px"
+                  onClick={stopEvaluation}
+                  isDisabled={!isEvaluating && !isPaused}
+                  opacity={(!isEvaluating && !isPaused) ? 0.3 : shouldStopEvaluation ? 0.6 : 1}
+                  _hover={{ bg: (isEvaluating || isPaused) ? "red.50" : undefined }}
+                >
+                  {shouldStopEvaluation ? "Stopping…" : "Stop"}
+                </Button>
+              </HStack>
+
+              {reviewQueue.length > 0 && (
+                <Button
+                  size="md"
+                  colorScheme="orange"
+                  variant="solid"
+                  onClick={() => { setReviewModalIndex(0); setReviewModalOpen(true); }}
+                >
+                  Review Answers
+                  <Badge ml={2} colorScheme="red" borderRadius="full" fontSize="xs">{reviewQueue.length}</Badge>
+                </Button>
+              )}
+
+              {isEvaluating && (
+                <Box>
+                  <HStack justify="space-between" mb={1}>
+                    <Text fontSize="xs" color="blue.600">Progress</Text>
+                    <Text fontSize="xs" color="blue.600">{Math.round((progress.current / progress.total) * 100)}%</Text>
+                  </HStack>
                   <Box w="full" h="2px" bg="blue.100" borderRadius="full" overflow="hidden">
                     <Box
                       w={`${(progress.current / progress.total) * 100}%`}
@@ -4018,8 +4358,24 @@ export default function Home() {
                   </Box>
                 </Box>
               )}
-            </Box>
-          </VStack>
+            </VStack>
+
+            {/* Right: unified system prompt */}
+            <FormControl flex="3">
+              <FormLabel fontSize="sm">System Prompt</FormLabel>
+              <Textarea
+                value={systemPrompt}
+                onChange={(e) => setSystemPrompt(e.target.value)}
+                placeholder="Enter system prompt (used for both single and batched trials)"
+                rows={5}
+                bg="gray.50"
+                size="sm"
+              />
+              <Text fontSize="xs" color="gray.500" mt={1}>
+                If the model doesn't follow the format, answers are flagged for manual review.
+              </Text>
+            </FormControl>
+          </HStack>
         </Box>
 
         <Box 
@@ -6907,7 +7263,7 @@ export default function Home() {
                             </Thead>
                             <Tbody>
                               {rows.map((r, i) => (
-                                <Tr key={r.model}>
+                                <Tr key={`${r.model}-${i}`}>
                                   <Td fontWeight="medium" whiteSpace="nowrap">
                                     <HStack spacing={2}>
                                       <Box w={2} h={2} borderRadius="full" bg={PERF_COLORS[i % PERF_COLORS.length]} flexShrink={0} />
@@ -7092,8 +7448,8 @@ export default function Home() {
                               </Tr>
                             </Thead>
                             <Tbody>
-                              {perfRows.map(r => (
-                                <Tr key={r.model}>
+                              {perfRows.map((r, i) => (
+                                <Tr key={`${r.model}-${i}`}>
                                   <Td fontWeight="medium" whiteSpace="nowrap">{r.model}</Td>
                                   <Td textAlign="center">{r.avgTokens.toFixed(1)}</Td>
                                   <Td textAlign="center">{r.avgTimeMs.toFixed(0)}</Td>
@@ -7328,5 +7684,191 @@ export default function Home() {
         </Box>
       </Box>
     </Flex>
+
+    {/* Review Modal — placed outside <Flex> so it renders as a true portal overlay */}
+    {/* Review Modal */}
+    <Modal isOpen={reviewModalOpen} onClose={() => setReviewModalOpen(false)} size="2xl" scrollBehavior="inside">
+      <ModalOverlay />
+      <ModalContent>
+        <ModalHeader pb={2}>
+          <HStack>
+            <Text>Review Required</Text>
+            <Badge colorScheme="orange" borderRadius="full">{reviewQueue.length} remaining</Badge>
+          </HStack>
+          <Text fontSize="sm" fontWeight="normal" color="gray.500" mt={1}>
+            Read the model response and select the correct answer letter.
+          </Text>
+        </ModalHeader>
+        <ModalCloseButton />
+        <ModalBody>
+          {(() => {
+            const item = reviewQueue[reviewModalIndex];
+            if (!item) return <Text color="gray.500">All reviews complete.</Text>;
+
+            // ── Batch review (extended trials) ──────────────────────────────
+            if (item.batchQuestions) {
+              const currentAnswers = batchAnswers[item.id] || {};
+              const pending = item.batchQuestions.filter(bq => bq.needsReview && !currentAnswers[bq.questionIndex]);
+              const allAnswered = pending.length === 0;
+              return (
+                <VStack align="stretch" spacing={4}>
+                  <HStack fontSize="xs" color="gray.500" flexWrap="wrap" spacing={2}>
+                    <Text fontWeight="semibold" color="gray.700">{item.modelName}</Text>
+                    <Text>·</Text><Text>{item.trialKey === 'trial2' ? 'Trial 2' : item.trialKey === 'trial3' ? 'Trial 3' : `Extended Trial ${item.trialNumber}`}</Text>
+                    <Text>·</Text><Text>{item.batchQuestions.filter(bq => bq.needsReview).length} of {item.batchQuestions.length} need review</Text>
+                  </HStack>
+
+                  <Box>
+                    <Text fontSize="xs" fontWeight="semibold" color="gray.600" mb={1} textTransform="uppercase" letterSpacing="wide">Model Response</Text>
+                    <Box p={3} bg="gray.50" borderRadius="md" fontSize="sm" fontFamily="mono" whiteSpace="pre-wrap" maxH="160px" overflowY="auto" lineHeight="1.5">
+                      {item.rawResponse || <Text as="span" color="gray.400">(empty response)</Text>}
+                    </Box>
+                  </Box>
+
+                  <Divider />
+
+                  <VStack align="stretch" spacing={3}>
+                    {item.batchQuestions.map((bq, i) => {
+                      // For parsed questions, pre-select their parsed answer unless overridden
+                      const selected = currentAnswers[bq.questionIndex] ?? (!bq.needsReview ? bq.parsedAnswer : undefined);
+                      const isOverride = !bq.needsReview && currentAnswers[bq.questionIndex] !== undefined;
+                      return (
+                        <Box key={bq.questionIndex} p={3} borderRadius="md" border="1px" borderColor={bq.needsReview ? "orange.200" : "gray.100"} bg={bq.needsReview ? "orange.50" : "gray.50"}>
+                          <HStack mb={2} justify="space-between" flexWrap="wrap">
+                            <Text fontSize="xs" fontWeight="semibold" color="gray.600">Q{i + 1} &nbsp;·&nbsp; Correct: <Text as="span" color="green.600" fontWeight="bold">{bq.correctAnswer}</Text></Text>
+                            {selected && (
+                              <Badge colorScheme={selected === bq.correctAnswer ? "green" : "red"} fontSize="xs">
+                                {isOverride ? "Override:" : bq.needsReview ? "Selected:" : "Parsed:"} {selected}
+                              </Badge>
+                            )}
+                          </HStack>
+                          <Box p={2} bg="white" borderRadius="sm" fontSize="sm" color="gray.700" lineHeight="1.6" maxH="120px" overflowY="auto" mb={2}>
+                            {bq.question}
+                          </Box>
+                          <HStack spacing={1} flexWrap="wrap">
+                            {['A', 'B', 'C', 'D', 'E'].map(letter => (
+                              <Button
+                                key={letter}
+                                size="sm"
+                                w="40px"
+                                colorScheme={letter === bq.correctAnswer ? "green" : "blue"}
+                                variant={selected === letter ? "solid" : "outline"}
+                                fontWeight="bold"
+                                onClick={() => setBatchAnswers(prev => ({ ...prev, [item.id]: { ...(prev[item.id] || {}), [bq.questionIndex]: letter } }))}
+                              >
+                                {letter}
+                              </Button>
+                            ))}
+                            <Button
+                              size="sm"
+                              colorScheme="red"
+                              variant={selected === 'W' ? "solid" : "outline"}
+                              fontWeight="bold"
+                              onClick={() => setBatchAnswers(prev => ({ ...prev, [item.id]: { ...(prev[item.id] || {}), [bq.questionIndex]: 'W' } }))}
+                              title="No valid answer in this response"
+                            >
+                              Wrong
+                            </Button>
+                          </HStack>
+                        </Box>
+                      );
+                    })}
+                  </VStack>
+
+                  <Divider />
+
+                  <HStack spacing={3}>
+                    <Button
+                      colorScheme="blue"
+                      isDisabled={!allAnswered}
+                      onClick={() => resolveBatchReview(item, currentAnswers)}
+                      flex={1}
+                    >
+                      {allAnswered ? 'Submit All' : `Submit All (${pending.length} remaining)`}
+                    </Button>
+                    <Button variant="ghost" colorScheme="gray" onClick={() => skipReview(item)}>Skip</Button>
+                  </HStack>
+                </VStack>
+              );
+            }
+
+            // ── Single-question review (trials 1–3) ────────────────────────
+            const trialLabel = item.trialKey === 'trial1' ? 'Trial 1' : item.trialKey === 'trial2' ? 'Trial 2' : item.trialKey === 'trial3' ? 'Trial 3' : 'Extra Trial';
+            return (
+              <VStack align="stretch" spacing={4}>
+                <HStack fontSize="xs" color="gray.500" flexWrap="wrap" spacing={2}>
+                  <Text fontWeight="semibold" color="gray.700">{item.modelName}</Text>
+                  <Text>·</Text><Text>{trialLabel}</Text>
+                  <Text>·</Text><Text>Question {item.questionIndex + 1}</Text>
+                  <Text>·</Text>
+                  <Text>Correct answer: <Text as="span" fontWeight="bold" color="green.600">{item.correctAnswer}</Text></Text>
+                </HStack>
+
+                <Box>
+                  <Text fontSize="xs" fontWeight="semibold" color="gray.600" mb={1} textTransform="uppercase" letterSpacing="wide">Question</Text>
+                  <Box p={3} bg="blue.50" borderRadius="md" fontSize="sm" lineHeight="1.6">{item.question}</Box>
+                </Box>
+
+                <Box>
+                  <Text fontSize="xs" fontWeight="semibold" color="gray.600" mb={1} textTransform="uppercase" letterSpacing="wide">Model Response</Text>
+                  <Box p={3} bg="gray.50" borderRadius="md" fontSize="sm" fontFamily="mono" whiteSpace="pre-wrap" maxH="240px" overflowY="auto" lineHeight="1.5">
+                    {item.rawResponse}
+                  </Box>
+                </Box>
+
+                <Divider />
+
+                <Box>
+                  <Text fontSize="xs" fontWeight="semibold" color="gray.600" mb={2} textTransform="uppercase" letterSpacing="wide">Select Answer</Text>
+                  <HStack spacing={2} flexWrap="wrap">
+                    {['A', 'B', 'C', 'D', 'E'].map(letter => (
+                      <Button
+                        key={letter}
+                        size="md"
+                        w="52px"
+                        colorScheme={letter === item.correctAnswer.toUpperCase() ? "green" : "blue"}
+                        variant="outline"
+                        fontWeight="bold"
+                        onClick={() => resolveReview(item, letter)}
+                        _hover={{ bg: letter === item.correctAnswer.toUpperCase() ? "green.50" : "blue.50" }}
+                      >
+                        {letter}
+                      </Button>
+                    ))}
+                    {item.correctAnswer.toUpperCase() !== 'W' && (
+                      <Button
+                        size="md"
+                        colorScheme="red"
+                        variant="outline"
+                        fontWeight="bold"
+                        onClick={() => resolveReview(item, 'W')}
+                        _hover={{ bg: "red.50" }}
+                        title="Mark as wrong — no valid answer in this response"
+                      >
+                        Wrong
+                      </Button>
+                    )}
+                    <Button size="md" variant="ghost" colorScheme="gray" onClick={() => skipReview(item)} ml={1}>
+                      Skip
+                    </Button>
+                  </HStack>
+                </Box>
+              </VStack>
+            );
+          })()}
+        </ModalBody>
+        <ModalFooter borderTop="1px" borderColor="gray.100" pt={3}>
+          <HStack w="full" justify="space-between">
+            <HStack spacing={2}>
+              <Button size="sm" variant="outline" isDisabled={reviewModalIndex === 0} onClick={() => setReviewModalIndex(i => i - 1)}>← Prev</Button>
+              <Text fontSize="sm" color="gray.500">{Math.min(reviewModalIndex + 1, reviewQueue.length)} / {reviewQueue.length}</Text>
+              <Button size="sm" variant="outline" isDisabled={reviewModalIndex >= reviewQueue.length - 1} onClick={() => setReviewModalIndex(i => i + 1)}>Next →</Button>
+            </HStack>
+            <Button size="sm" onClick={() => setReviewModalOpen(false)}>Close</Button>
+          </HStack>
+        </ModalFooter>
+      </ModalContent>
+    </Modal>
+    </>
   );
 }
