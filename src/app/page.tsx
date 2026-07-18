@@ -85,6 +85,7 @@ interface Model {
   provider: Provider;
   apiModelId?: string; // The actual model ID to send to the API
   reasoningEffort?: string; // For GPT-5 models: "low", "medium", "high"
+  thinkingEnabled?: boolean; // For Claude models that support thinking; false = thinking off
 }
 
 interface StoredApiConfig {
@@ -2517,18 +2518,19 @@ export default function Home() {
       if (isClaude) {
         // Adaptive thinking: supported on opus-4-*, sonnet-4-6, 3-7-sonnet.
         // Haiku 4.5 / Sonnet 4.5 do not support it — omit the thinking param for those.
-        // Opus 4.8 with thinking omitted or disabled writes reasoning in CAPS; adaptive keeps it internal.
+        // output_config.effort applies independently of thinking and affects response thoroughness.
         const apiModelId = (model.apiModelId || modelId).toLowerCase();
-        const supportsAdaptiveThinking = /^claude-(opus-4|sonnet-4-6|3-7-sonnet)/.test(apiModelId);
+        const supportsAdaptiveThinking = /^claude-(opus-4|sonnet-4-6|sonnet-5|fable-5|mythos-5|3-7-sonnet)/.test(apiModelId);
+        const thinkingOn = supportsAdaptiveThinking && model.thinkingEnabled !== false;
         const effortLevel = model.reasoningEffort || null;
-        requestBody.max_tokens = effortLevel ? 16384 : 4096;
+        requestBody.max_tokens = thinkingOn ? 16384 : 4096;
         requestBody.system = prompt;
         requestBody.messages = [{ role: "user", content: question }];
-        if (supportsAdaptiveThinking) {
+        if (thinkingOn) {
           requestBody.thinking = { type: "adaptive" };
-          if (effortLevel) {
-            requestBody.output_config = { effort: effortLevel };
-          }
+        }
+        if (supportsAdaptiveThinking && effortLevel) {
+          requestBody.output_config = { effort: effortLevel };
         }
       } else if (isO1Model) {
         requestBody.messages = [
@@ -2756,16 +2758,17 @@ export default function Home() {
 
         if (isClaude) {
           const apiModelId = (model.apiModelId || modelId).toLowerCase();
-          const supportsAdaptiveThinking = /^claude-(opus-4|sonnet-4-6|3-7-sonnet)/.test(apiModelId);
+          const supportsAdaptiveThinking = /^claude-(opus-4|sonnet-4-6|sonnet-5|fable-5|mythos-5|3-7-sonnet)/.test(apiModelId);
+          const thinkingOn = supportsAdaptiveThinking && model.thinkingEnabled !== false;
           const effortLevel = model.reasoningEffort || null;
-          requestBody.max_tokens = effortLevel ? 32768 : 4096;
+          requestBody.max_tokens = thinkingOn ? 32768 : 4096;
           requestBody.system = prompt;
           requestBody.messages = [{ role: "user", content: combinedQuestion }];
-          if (supportsAdaptiveThinking) {
+          if (thinkingOn) {
             requestBody.thinking = { type: "adaptive" };
-            if (effortLevel) {
-              requestBody.output_config = { effort: effortLevel };
-            }
+          }
+          if (supportsAdaptiveThinking && effortLevel) {
+            requestBody.output_config = { effort: effortLevel };
           }
         } else if (isO1Model) {
           requestBody.messages = [
@@ -3502,31 +3505,57 @@ export default function Home() {
                 });
               }
             } else if (provider === 'claude') {
-              // Adaptive thinking supported on opus-4-*, sonnet-4-6, 3-7-sonnet only.
-              // sonnet-4-5 and haiku-4-5 do NOT support it — excluded from this regex.
-              // "max"/"xhigh" effort is Opus-only.
-              const isClaudeWithThinking = /^claude-(3-7-sonnet|opus-4|sonnet-4-6)/i.test(model.id);
+              // fable-5 / mythos-5: thinking is always on, cannot be disabled.
+              // opus-4-*, sonnet-4-6, sonnet-5, 3-7-sonnet: thinking optional.
+              // sonnet-4-5 and haiku-4-5 do NOT support thinking.
+              const isAlwaysThinking = /^claude-(fable-5|mythos-5)/i.test(model.id);
+              const isClaudeWithThinking = isAlwaysThinking || /^claude-(3-7-sonnet|opus-4|sonnet-4-6|sonnet-5)/i.test(model.id);
               if (isClaudeWithThinking) {
-                // Auto: adaptive thinking with default (high) effort — no explicit output_config sent
-                providerModels.push({
-                  id: baseId,
-                  name: `${model.id} (Auto)`,
-                  provider,
-                  apiModelId: model.id,
-                });
-                const isOpus = /^claude-opus-4/i.test(model.id);
-                const effortLevels: { effort: string; suffix: string }[] = [
-                  { effort: 'low', suffix: ' (Low thinking)' },
-                  { effort: 'medium', suffix: ' (Medium thinking)' },
-                  { effort: 'high', suffix: ' (High thinking)' },
-                  ...(isOpus ? [{ effort: 'xhigh', suffix: ' (XHigh thinking)' }, { effort: 'max', suffix: ' (Max thinking)' }] : []),
+                const isHighTier = /^claude-(opus-4|fable-5|mythos-5)/i.test(model.id);
+                const effortLevels: { effort: string }[] = [
+                  { effort: 'low' },
+                  { effort: 'medium' },
+                  { effort: 'high' },
+                  ...(isHighTier ? [{ effort: 'xhigh' }, { effort: 'max' }] : []),
                 ];
-                effortLevels.forEach(({ effort, suffix }) => {
+
+                // No thinking variants — not available for always-thinking models (fable-5, mythos-5)
+                if (!isAlwaysThinking) {
                   providerModels.push({
-                    id: `${baseId}-thinking-${effort}`,
-                    name: `${model.id}${suffix}`,
+                    id: `${baseId}-no-thinking`,
+                    name: `${model.id} (No thinking)`,
                     provider,
                     apiModelId: model.id,
+                    thinkingEnabled: false,
+                  });
+                  effortLevels.forEach(({ effort }) => {
+                    providerModels.push({
+                      id: `${baseId}-no-thinking-${effort}`,
+                      name: `${model.id} (No thinking · ${effort.charAt(0).toUpperCase() + effort.slice(1)} effort)`,
+                      provider,
+                      apiModelId: model.id,
+                      thinkingEnabled: false,
+                      reasoningEffort: effort,
+                    });
+                  });
+                }
+
+                // Thinking variants
+                providerModels.push({
+                  id: baseId,
+                  name: `${model.id} (Auto thinking)`,
+                  provider,
+                  apiModelId: model.id,
+                  thinkingEnabled: true,
+                });
+                effortLevels.forEach(({ effort }) => {
+                  const label = effort.charAt(0).toUpperCase() + effort.slice(1);
+                  providerModels.push({
+                    id: `${baseId}-thinking-${effort}`,
+                    name: `${model.id} (${label} thinking)`,
+                    provider,
+                    apiModelId: model.id,
+                    thinkingEnabled: true,
                     reasoningEffort: effort,
                   });
                 });
