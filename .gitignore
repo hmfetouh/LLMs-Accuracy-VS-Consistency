@@ -41,5 +41,6 @@ coverage/
 # CSV files
 *.csv
 
-# Markdown documentation files
+# Markdown documentation files (keep README for GitHub)
 *.md
+!README.md
