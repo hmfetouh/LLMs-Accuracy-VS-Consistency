@@ -3324,12 +3324,17 @@ export default function Home() {
             const modelAlreadyHasProvider = model.id.toLowerCase().includes(provider.toLowerCase());
             const baseId = modelAlreadyHasProvider ? `provider-${provider}-${model.id}` : `${provider}-${model.id}`;
             
-            // Check for specific GPT-5.5 model (most specific first)
-            const isGPT55 = /^gpt-5\.5(?:-(pro))?(?:-\d{4}-\d{2}-\d{2})?$/i.test(model.id);
+            // Check for specific GPT-5.6 model (most specific first)
+            // Matches: gpt-5.6, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, and dated variants
+            const isGPT56 = /^gpt-5\.6(?:-(sol|terra|luna))?(?:-\d{4}-\d{2}-\d{2})?$/i.test(model.id);
+            const isGPT56Pro = /^gpt-5\.6-pro(?:-\d{4}-\d{2}-\d{2})?$/i.test(model.id);
+
+            // Check for specific GPT-5.5 model
+            const isGPT55 = /^gpt-5\.5(?:-pro)?(?:-\d{4}-\d{2}-\d{2})?$/i.test(model.id);
             const isGPT55Pro = /^gpt-5\.5-pro(?:-\d{4}-\d{2}-\d{2})?$/i.test(model.id);
-            
+
             // Check for specific GPT-5.4 model
-            const isGPT54 = /^gpt-5\.4(?:-(pro))?(?:-\d{4}-\d{2}-\d{2})?$/i.test(model.id);
+            const isGPT54 = /^gpt-5\.4(?:-pro)?(?:-\d{4}-\d{2}-\d{2})?$/i.test(model.id);
             const isGPT54Pro = /^gpt-5\.4-pro(?:-\d{4}-\d{2}-\d{2})?$/i.test(model.id);
             
             // Check for base GPT-5 (not 5.4 or 5.5)
@@ -3343,7 +3348,43 @@ export default function Home() {
             const isOSeriesWithReasoning = /^(o1|o3|o3-mini|o4-mini)(-\d{4}-\d{2}-\d{2})?$/i.test(model.id);
             
             if (provider === 'openai') {
-              if (isGPT55) {
+              if (isGPT56Pro) {
+                // GPT-5.6 Pro: medium, high, xhigh, max (always-on reasoning, higher tiers only)
+                const reasoningEfforts = [
+                  { effort: 'medium', suffix: ' (Medium reasoning - Default)' },
+                  { effort: 'high', suffix: ' (High reasoning)' },
+                  { effort: 'xhigh', suffix: ' (XHigh reasoning)' },
+                  { effort: 'max', suffix: ' (Max reasoning)' }
+                ];
+                reasoningEfforts.forEach(({ effort, suffix }) => {
+                  providerModels.push({
+                    id: `${baseId}-${effort}`,
+                    name: `${model.id}${suffix}`,
+                    provider: provider,
+                    apiModelId: model.id,
+                    reasoningEffort: effort
+                  });
+                });
+              } else if (isGPT56) {
+                // GPT-5.6 (sol/terra/luna/bare): none, low, medium (default), high, xhigh, max
+                const reasoningEfforts = [
+                  { effort: 'none', suffix: ' (No reasoning)' },
+                  { effort: 'low', suffix: ' (Low reasoning)' },
+                  { effort: 'medium', suffix: ' (Medium reasoning - Default)' },
+                  { effort: 'high', suffix: ' (High reasoning)' },
+                  { effort: 'xhigh', suffix: ' (XHigh reasoning)' },
+                  { effort: 'max', suffix: ' (Max reasoning)' }
+                ];
+                reasoningEfforts.forEach(({ effort, suffix }) => {
+                  providerModels.push({
+                    id: `${baseId}-${effort}`,
+                    name: `${model.id}${suffix}`,
+                    provider: provider,
+                    apiModelId: model.id,
+                    reasoningEffort: effort
+                  });
+                });
+              } else if (isGPT55) {
                 // GPT-5.5: none, low, medium (default), high, xhigh
                 const reasoningEfforts = [
                   { effort: 'none', suffix: ' (No reasoning)' },
