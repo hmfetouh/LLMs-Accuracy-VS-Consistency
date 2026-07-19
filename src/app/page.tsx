@@ -148,6 +148,7 @@ interface TrialResult {
   tokens: number;
   time: number; // in milliseconds
   aborted?: boolean;
+  refused?: boolean;      // model refused to answer (stop_reason=refusal) — skip in future trials
   needsReview?: boolean;  // response didn't follow format — awaiting manual answer selection
   rawResponse?: string;   // stored so the review modal can display it
   wasReviewed?: boolean;  // answer was manually corrected via the review panel
@@ -926,10 +927,29 @@ export default function Home() {
           currentQuestionIndex = 0;
         }
 
-        // Trial 2: Batch questions (up to 10 per request)
+        // Trial 2: Batch questions (up to 10 per request), skipping per-model refused questions
         if (currentPhase === 'trial2') {
           try {
-            const trial2Results = await runBatchedTrial(model, parsedQuestions, systemPrompt, 2, controller.signal);
+            // Collect questions refused by this model in trial1 — exclude them from the batch
+            const refusedIndices2 = new Set<number>();
+            trialResultsArray.forEach((qr, idx) => {
+              if (qr.modelResults[model.id]?.trial1?.refused) refusedIndices2.add(idx);
+            });
+            const nonRefusedIdx2 = parsedQuestions.map((_, i) => i).filter(i => !refusedIndices2.has(i));
+            const nonRefusedQ2 = nonRefusedIdx2.map(i => parsedQuestions[i]);
+
+            let partial2: TrialResult[] = [];
+            if (nonRefusedQ2.length > 0) {
+              partial2 = await runBatchedTrial(model, nonRefusedQ2, systemPrompt, 2, controller.signal);
+            }
+            // Merge: refused slots get an instant ERROR, others get the batch result
+            let j2 = 0;
+            const trial2Results = parsedQuestions.map((_, i) =>
+              refusedIndices2.has(i)
+                ? { answer: "ERROR", correct: false, tokens: 0, time: 0, refused: true } as TrialResult
+                : partial2[j2++]
+            );
+
             trial2Results.forEach((result, index) => {
               if (trialResultsArray[index].modelResults[model.id]) {
                 trialResultsArray[index].modelResults[model.id].trial2 = result;
@@ -1022,10 +1042,28 @@ export default function Home() {
           currentQuestionIndex = 0;
         }
 
-        // Trial 3: Batch questions (up to 10 per request)
+        // Trial 3: Batch questions (up to 10 per request), skipping per-model refused questions
         if (currentPhase === 'trial3') {
           try {
-            const trial3Results = await runBatchedTrial(model, parsedQuestions, systemPrompt, 3, controller.signal);
+            const refusedIndices3 = new Set<number>();
+            trialResultsArray.forEach((qr, idx) => {
+              const mr = qr.modelResults[model.id];
+              if (mr?.trial1?.refused || mr?.trial2?.refused) refusedIndices3.add(idx);
+            });
+            const nonRefusedIdx3 = parsedQuestions.map((_, i) => i).filter(i => !refusedIndices3.has(i));
+            const nonRefusedQ3 = nonRefusedIdx3.map(i => parsedQuestions[i]);
+
+            let partial3: TrialResult[] = [];
+            if (nonRefusedQ3.length > 0) {
+              partial3 = await runBatchedTrial(model, nonRefusedQ3, systemPrompt, 3, controller.signal);
+            }
+            let j3 = 0;
+            const trial3Results = parsedQuestions.map((_, i) =>
+              refusedIndices3.has(i)
+                ? { answer: "ERROR", correct: false, tokens: 0, time: 0, refused: true } as TrialResult
+                : partial3[j3++]
+            );
+
             trial3Results.forEach((result, index) => {
               if (trialResultsArray[index].modelResults[model.id]) {
                 trialResultsArray[index].modelResults[model.id].trial3 = result;
@@ -2591,6 +2629,7 @@ export default function Home() {
       const data = await response.json();
 
       let rawAnswer: string;
+      const isRefusal = isClaude && data.stop_reason === "refusal";
       if (isClaude) {
         // Claude returns { content: [{type: "text", text: "..."}, ...] }
         const textBlock = Array.isArray(data.content) ? data.content.find((c: any) => c.type === 'text') : null;
@@ -2620,7 +2659,7 @@ export default function Home() {
           provider: model.provider,
           model: model.name,
           request: requestBody,
-          error: `Empty response: stop_reason=${data.stop_reason ?? 'unknown'}, content=${JSON.stringify(data.content)}, raw="${rawAnswer}"`,
+          error: `${isRefusal ? 'Refusal' : 'Empty response'}: stop_reason=${data.stop_reason ?? 'unknown'}, content=${JSON.stringify(data.content)}, raw="${rawAnswer}"`,
           duration: duration,
           question: question,
           questionId: questionId,
@@ -2636,10 +2675,11 @@ export default function Home() {
           answer: "ERROR",
           correct: false,
           tokens: 0,
-          time: duration
+          time: duration,
+          ...(isRefusal && { refused: true }),
         };
       }
-      
+
       // Claude uses input_tokens/output_tokens, OpenAI uses prompt_tokens/completion_tokens
       const promptTokens = data.usage?.input_tokens || data.usage?.prompt_tokens || 0;
       const completionTokens = data.usage?.output_tokens || data.usage?.completion_tokens || 0;
@@ -2865,6 +2905,7 @@ export default function Home() {
 
         const data = await response.json();
 
+        const batchRefused = isClaude && data.stop_reason === "refusal";
         let rawText: string;
         if (isClaude) {
           const textBlock = Array.isArray(data.content) ? data.content.find((c: any) => c.type === 'text') : null;
@@ -2879,11 +2920,33 @@ export default function Home() {
         const completionTokens = data.usage?.output_tokens || data.usage?.completion_tokens || 0;
         const totalTokens = data.usage?.total_tokens || promptTokens + completionTokens || estimateTokenCount(prompt + combinedQuestion + responseText);
 
+        // If the whole batch was refused, mark every question as refused and move on — don't throw
+        if (batchRefused) {
+          setApiLogs(prev => [...prev, {
+            timestamp: Date.now(),
+            provider: model.provider,
+            model: model.name,
+            request: requestBody,
+            error: `Batch refused (stop_reason=refusal) for ${batch.length} questions`,
+            duration: duration,
+            question: `Batch of ${batch.length} questions`,
+            questionId: batch.map(q => q.id).join(', '),
+            temperature: temperature,
+            promptTokens: 0,
+            completionTokens: 0,
+            totalTokens: 0,
+            showFullRequest: false,
+          }]);
+          batch.forEach(q => {
+            results.push({ answer: "ERROR", correct: false, tokens: 0, time: Math.floor(duration / batch.length), refused: true });
+          });
+          continue;
+        }
 
         // Parse the response to extract individual answers
         const answers = parseAndResponseText(responseText, batch.length);
-        
-        
+
+
         // Log to API logs
         setApiLogs(prev => [...prev, {
           timestamp: Date.now(),
@@ -2903,14 +2966,13 @@ export default function Home() {
           totalTokens: totalTokens,
           showFullRequest: false,
         }]);
-        
+
         // Check for parsing failures - if too many answers are "ERROR", treat as API failure
         const errorCount = answers.filter(answer => answer === "ERROR").length;
         const errorRate = errorCount / batch.length;
 
-        // Only pause for genuine technical errors (empty response, HTTP errors, etc.).
-        // Model refusals / wrong-format responses are not transient — retrying won't help,
-        // so let them through as ERROR results and continue the evaluation.
+        // Only pause for genuine technical errors (network, rate-limit, etc.).
+        // Empty responses that are not refusals are transient — pause and retry.
         const isTechnicalError = responseText.trim().length === 0 ||
           /\b(error|exception|timeout|unauthorized|forbidden|rate.?limit|internal server|bad gateway|service unavailable)\b/i.test(responseText);
 
