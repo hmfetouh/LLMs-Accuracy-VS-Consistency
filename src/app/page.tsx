@@ -214,7 +214,6 @@ export default function Home() {
   const [selectedModels, setSelectedModels] = useState<Model[]>([]);
   const [availableModels, setAvailableModels] = useState<Model[]>([]);
   const [temperature, setTemperature] = useState(1.0);
-  const [onErrorBehavior, setOnErrorBehavior] = useState<'continue' | 'retry1' | 'retry2' | 'pause'>('retry1');
   const [isProcessing, setIsProcessing] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [questionCount, setQuestionCount] = useState<number>(0);
@@ -844,16 +843,7 @@ export default function Home() {
             const q = parsedQuestions[i];
             
             try {
-              const maxRetries = onErrorBehavior === 'retry2' ? 2 : onErrorBehavior === 'retry1' ? 1 : 0;
-              let trialResult = await runSingleQuestionTrial(model, q.question, q.answer, systemPrompt, q.id, controller.signal);
-              for (let attempt = 0; attempt < maxRetries && trialResult.answer === 'ERROR'; attempt++) {
-                await new Promise(r => setTimeout(r, 2000));
-                trialResult = await runSingleQuestionTrial(model, q.question, q.answer, systemPrompt, q.id, controller.signal);
-              }
-              if (trialResult.answer === 'ERROR' && onErrorBehavior === 'pause') {
-                shouldPauseRef.current = true;
-                setShouldPauseEvaluation(true);
-              }
+              const trialResult = await runSingleQuestionTrial(model, q.question, q.answer, systemPrompt, q.id, controller.signal);
 
               if (!trialResultsArray[i].modelResults[model.id]) {
                 trialResultsArray[i].modelResults[model.id] = { trial1: trialResult };
@@ -940,17 +930,6 @@ export default function Home() {
         if (currentPhase === 'trial2') {
           try {
             const trial2Results = await runBatchedTrial(model, parsedQuestions, systemPrompt, 2, controller.signal);
-            const maxRetries2 = onErrorBehavior === 'retry2' ? 2 : onErrorBehavior === 'retry1' ? 1 : 0;
-            for (let idx = 0; idx < trial2Results.length; idx++) {
-              for (let attempt = 0; attempt < maxRetries2 && trial2Results[idx].answer === 'ERROR'; attempt++) {
-                await new Promise(r => setTimeout(r, 2000));
-                trial2Results[idx] = await runSingleQuestionTrial(model, parsedQuestions[idx].question, parsedQuestions[idx].answer, systemPrompt, parsedQuestions[idx].id, controller.signal);
-              }
-              if (trial2Results[idx].answer === 'ERROR' && onErrorBehavior === 'pause') {
-                shouldPauseRef.current = true;
-                setShouldPauseEvaluation(true);
-              }
-            }
             trial2Results.forEach((result, index) => {
               if (trialResultsArray[index].modelResults[model.id]) {
                 trialResultsArray[index].modelResults[model.id].trial2 = result;
@@ -1047,17 +1026,6 @@ export default function Home() {
         if (currentPhase === 'trial3') {
           try {
             const trial3Results = await runBatchedTrial(model, parsedQuestions, systemPrompt, 3, controller.signal);
-            const maxRetries3 = onErrorBehavior === 'retry2' ? 2 : onErrorBehavior === 'retry1' ? 1 : 0;
-            for (let idx = 0; idx < trial3Results.length; idx++) {
-              for (let attempt = 0; attempt < maxRetries3 && trial3Results[idx].answer === 'ERROR'; attempt++) {
-                await new Promise(r => setTimeout(r, 2000));
-                trial3Results[idx] = await runSingleQuestionTrial(model, parsedQuestions[idx].question, parsedQuestions[idx].answer, systemPrompt, parsedQuestions[idx].id, controller.signal);
-              }
-              if (trial3Results[idx].answer === 'ERROR' && onErrorBehavior === 'pause') {
-                shouldPauseRef.current = true;
-                setShouldPauseEvaluation(true);
-              }
-            }
             trial3Results.forEach((result, index) => {
               if (trialResultsArray[index].modelResults[model.id]) {
                 trialResultsArray[index].modelResults[model.id].trial3 = result;
@@ -1223,18 +1191,6 @@ export default function Home() {
                   trialNum,
                   controller.signal
                 );
-                const maxRetriesExt = onErrorBehavior === 'retry2' ? 2 : onErrorBehavior === 'retry1' ? 1 : 0;
-                for (let idx = 0; idx < trialResults.length; idx++) {
-                  const iq = modelInconsistentQuestions[idx];
-                  for (let attempt = 0; attempt < maxRetriesExt && trialResults[idx].answer === 'ERROR'; attempt++) {
-                    await new Promise(r => setTimeout(r, 2000));
-                    trialResults[idx] = await runSingleQuestionTrial(model, iq.question.question, iq.question.answer, systemPrompt, iq.question.id, controller.signal);
-                  }
-                  if (trialResults[idx].answer === 'ERROR' && onErrorBehavior === 'pause') {
-                    shouldPauseRef.current = true;
-                    setShouldPauseEvaluation(true);
-                  }
-                }
                 // Track addIdx per question before pushing, then push all results
                 const batchAddIdxMap: number[] = [];
                 trialResults.forEach((result, idx) => {
@@ -4409,24 +4365,6 @@ export default function Home() {
                 </Slider>
                 <Text fontSize="xs" color="gray.500" mt={1}>
                   Lower values make the output more focused and deterministic
-                </Text>
-              </FormControl>
-
-              <FormControl>
-                <FormLabel fontSize="sm" mb={1}>On Error</FormLabel>
-                <Select
-                  size="sm"
-                  value={onErrorBehavior}
-                  onChange={e => setOnErrorBehavior(e.target.value as typeof onErrorBehavior)}
-                  isDisabled={isEvaluating && !isPaused}
-                >
-                  <option value="continue">Continue (record error)</option>
-                  <option value="retry1">Retry once</option>
-                  <option value="retry2">Retry twice</option>
-                  <option value="pause">Pause on error</option>
-                </Select>
-                <Text fontSize="xs" color="gray.500" mt={1}>
-                  What to do when a model returns an empty or failed response
                 </Text>
                 {selectedModels.some(m =>
                   m.provider === 'claude' ||
