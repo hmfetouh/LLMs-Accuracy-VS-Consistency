@@ -218,7 +218,7 @@ export default function Home() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [questionCount, setQuestionCount] = useState<number>(0);
-  const [systemPrompt, setSystemPrompt] = useState("You are an AI assistant helping evaluate knowledge on standardized multiple-choice exams. Answer with only the single correct option letter (A, B, C, or D). For multiple questions, use a numbered list:\n1. A\n2. B\nNo explanation or extra text.");
+  const [systemPrompt, setSystemPrompt] = useState("Answer with only the single correct option letter (A, B, C, or D). For multiple questions, use a numbered list:\n1. A\n2. B\nNo explanation or extra text.");
   const [reviewQueue, setReviewQueue] = useState<ReviewItem[]>([]);
   const [reviewModalOpen, setReviewModalOpen] = useState(false);
   const [reviewModalIndex, setReviewModalIndex] = useState(0);
