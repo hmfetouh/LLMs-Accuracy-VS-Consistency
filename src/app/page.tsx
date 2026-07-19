@@ -2522,9 +2522,8 @@ export default function Home() {
         const apiModelId = (model.apiModelId || modelId).toLowerCase();
         const supportsAdaptiveThinking = /^claude-(opus-4|sonnet-4-6|sonnet-5|fable-5|mythos-5|3-7-sonnet)/.test(apiModelId);
         const thinkingOn = supportsAdaptiveThinking && model.thinkingEnabled !== false;
-        const isAlwaysThinking = /^claude-(fable-5|mythos-5)/.test(apiModelId);
         const effortLevel = model.reasoningEffort || null;
-        requestBody.max_tokens = isAlwaysThinking ? 65536 : (thinkingOn ? 16384 : 4096);
+        requestBody.max_tokens = thinkingOn ? 65536 : 4096;
         requestBody.system = prompt;
         requestBody.messages = [{ role: "user", content: question }];
         if (thinkingOn) {
@@ -2763,9 +2762,8 @@ export default function Home() {
           const apiModelId = (model.apiModelId || modelId).toLowerCase();
           const supportsAdaptiveThinking = /^claude-(opus-4|sonnet-4-6|sonnet-5|fable-5|mythos-5|3-7-sonnet)/.test(apiModelId);
           const thinkingOn = supportsAdaptiveThinking && model.thinkingEnabled !== false;
-          const isAlwaysThinking = /^claude-(fable-5|mythos-5)/.test(apiModelId);
           const effortLevel = model.reasoningEffort || null;
-          requestBody.max_tokens = isAlwaysThinking ? 131072 : (thinkingOn ? 32768 : 4096);
+          requestBody.max_tokens = thinkingOn ? 131072 : 4096;
           requestBody.system = prompt;
           requestBody.messages = [{ role: "user", content: combinedQuestion }];
           if (thinkingOn) {
