@@ -2599,9 +2599,11 @@ export default function Home() {
         rawAnswer = data.choices[0].message.content || "";
       }
 
+      // Strip reasoning/thinking blocks emitted by models like DeepSeek R1
+      // (<think>...</think>) before parsing — the actual answer follows after them.
+      let cleanedAnswer = rawAnswer.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
       // For single questions, strip leading numbering then common punctuation wrappers.
       // e.g. "1. B" → "B", "(B)" → "B", "B." → "B", "B)" → "B"
-      let cleanedAnswer = rawAnswer.trim();
       cleanedAnswer = cleanedAnswer.replace(/^\s*\d+[.)\-:]\s*/g, '');
       cleanedAnswer = cleanedAnswer.replace(/^[\s(]*([A-Ea-e])[\s.)]*$/i, '$1');
       const answer = cleanedAnswer.trim().toUpperCase();
@@ -2865,13 +2867,14 @@ export default function Home() {
         } else {
           rawText = data.choices[0].message.content || "";
         }
-        const responseText = rawText.trim();
+        // Strip reasoning/thinking blocks from models like DeepSeek R1 before parsing
+        const responseText = rawText.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
         const duration = Date.now() - startTime;
         const promptTokens = data.usage?.input_tokens || data.usage?.prompt_tokens || 0;
         const completionTokens = data.usage?.output_tokens || data.usage?.completion_tokens || 0;
         const totalTokens = data.usage?.total_tokens || promptTokens + completionTokens || estimateTokenCount(prompt + combinedQuestion + responseText);
-        
-        
+
+
         // Parse the response to extract individual answers
         const answers = parseAndResponseText(responseText, batch.length);
         
