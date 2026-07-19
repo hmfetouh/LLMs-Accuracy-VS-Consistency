@@ -4058,6 +4058,8 @@ export default function Home() {
                         size="sm"
                         textAlign="left"
                         fontWeight="normal"
+                        isDisabled={isEvaluating && !isPaused}
+                        title={isEvaluating && !isPaused ? "Pause the evaluation to add models" : undefined}
                       >
                         Select model
                       </MenuButton>
@@ -4145,6 +4147,15 @@ export default function Home() {
                     {selectedModels.map((model, index) => {
                       // Ollama doesn't require a key — treat it as always valid
                       const hasValidKey = model.provider === 'ollama' || getActiveApiKeyForProvider(model.provider as Provider) !== null;
+                      // Lock models that have already started or are in progress — removing them would
+                      // shift indices and corrupt the currentModelIndex on resume
+                      const currentModelIdx = evaluationState?.currentModelIndex ?? -1;
+                      const isModelLocked = (isEvaluating && !isPaused) ||
+                        ((isEvaluating || isPaused) && evaluationState !== null && index <= currentModelIdx);
+                      const lockReason = !isEvaluating && !isPaused ? undefined
+                        : index < currentModelIdx ? "Already evaluated"
+                        : index === currentModelIdx ? "Currently in progress"
+                        : (isEvaluating && !isPaused) ? "Pause to remove" : undefined;
                       return (
                         <Box
                           key={model.id}
@@ -4194,10 +4205,12 @@ export default function Home() {
                                 variant="ghost"
                                 colorScheme={hasValidKey ? "blue" : "yellow"}
                                 onClick={() => setSelectedModels(prev => prev.filter(m => m.id !== model.id))}
+                                isDisabled={isModelLocked}
+                                title={lockReason}
                                 p={1}
                                 height="auto"
                                 minW="auto"
-                                _hover={{ opacity: 0.8 }}
+                                _hover={{ opacity: isModelLocked ? undefined : 0.8 }}
                               >
                                 ✕
                               </Button>
@@ -4207,13 +4220,18 @@ export default function Home() {
                       );
                     })}
                   </Flex>
+                  {isPaused && evaluationState && (
+                    <Text fontSize="xs" color="blue.500" mt={2}>
+                      New models added now will be evaluated after the current one finishes. Models already started cannot be removed.
+                    </Text>
+                  )}
                 </Box>
               )}
             </VStack>
           </Box>
         </Box>
 
-        <Box 
+        <Box
           id="database"
           p={6} 
           borderRadius="lg" 
