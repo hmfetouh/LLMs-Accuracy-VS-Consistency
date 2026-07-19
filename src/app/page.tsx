@@ -2647,7 +2647,7 @@ export default function Home() {
       // For single questions, strip leading numbering then common punctuation wrappers.
       // e.g. "1. B" → "B", "(B)" → "B", "B." → "B", "B)" → "B"
       cleanedAnswer = cleanedAnswer.replace(/^\s*\d+[.)\-:]\s*/g, '');
-      cleanedAnswer = cleanedAnswer.replace(/^[\s(]*([A-Ea-e])[\s.)]*$/i, '$1');
+      cleanedAnswer = cleanedAnswer.replace(/^[\s(]*([A-Za-z])[\s.)]*$/i, '$1');
       const answer = cleanedAnswer.trim().toUpperCase();
       const duration = Date.now() - startTime;
 
@@ -2709,7 +2709,7 @@ export default function Home() {
       }]);
 
       // Flag for manual review when the answer isn't a clean single letter A-E
-      const needsReview = rawAnswer.length > 0 && !/^[A-Ea-e]$/.test(answer);
+      const needsReview = rawAnswer.length > 0 && !/^[A-Za-z]$/.test(answer);
       return {
         answer: needsReview ? '?' : answer,
         correct: needsReview ? false : answer === correctAnswer.toUpperCase(),
@@ -2988,8 +2988,8 @@ export default function Home() {
         batch.forEach((q, idx) => {
           const raw = answers[idx] || "ERROR";
           // Strip punctuation wrappers before checking (e.g. "(B)" → "B", "B." → "B")
-          const parsedAnswer = raw.replace(/^[\s(]*([A-Ea-e])[\s.)]*$/i, '$1').toUpperCase() || raw;
-          const needsReview = responseText.length > 0 && !/^[A-Ea-e]$/.test(parsedAnswer);
+          const parsedAnswer = raw.replace(/^[\s(]*([A-Za-z])[\s.)]*$/i, '$1').toUpperCase() || raw;
+          const needsReview = responseText.length > 0 && !/^[A-Za-z]$/.test(parsedAnswer);
           results.push({
             answer: needsReview ? '?' : parsedAnswer,
             correct: needsReview ? false : parsedAnswer.toUpperCase() === q.answer.toUpperCase(),
@@ -4708,48 +4708,23 @@ export default function Home() {
                                   <Td borderRight="1px" borderColor="gray.100" fontSize="xs">
                                     {modelResult.trial1?.time || '-'}
                                   </Td>
-                                  <Td 
-                                    borderRight="1px" 
-                                    borderColor="gray.100" 
-                                    fontSize="xs" 
-                                    fontWeight="bold"
-                                    bg={modelResult.trial1?.aborted || !modelResult.trial1?.answer ? "white" : modelResult.trial1?.correct ? "green.100" : "red.100"}
-                                    maxW="60px"
-                                    overflow="hidden"
-                                    textOverflow="ellipsis"
-                                    whiteSpace="nowrap"
-                                    title={modelResult.trial1?.answer || '-'}
-                                  >
-                                    {modelResult.trial1?.answer || '-'}
-                                  </Td>
-                                  <Td 
-                                    borderRight="1px" 
-                                    borderColor="gray.100" 
-                                    fontSize="xs" 
-                                    fontWeight="bold"
-                                    bg={modelResult.trial2?.aborted || !modelResult.trial2?.answer ? "white" : modelResult.trial2?.correct ? "green.100" : "red.100"}
-                                    maxW="60px"
-                                    overflow="hidden"
-                                    textOverflow="ellipsis"
-                                    whiteSpace="nowrap"
-                                    title={modelResult.trial2?.answer || '-'}
-                                  >
-                                    {modelResult.trial2?.answer || '-'}
-                                  </Td>
-                                  <Td 
-                                    borderRight="1px" 
-                                    borderColor="gray.100" 
-                                    fontSize="xs" 
-                                    fontWeight="bold"
-                                    bg={modelResult.trial3?.aborted || !modelResult.trial3?.answer ? "white" : modelResult.trial3?.correct ? "green.100" : "red.100"}
-                                    maxW="60px"
-                                    overflow="hidden"
-                                    textOverflow="ellipsis"
-                                    whiteSpace="nowrap"
-                                    title={modelResult.trial3?.answer || '-'}
-                                  >
-                                    {modelResult.trial3?.answer || '-'}
-                                  </Td>
+                                  {([modelResult.trial1, modelResult.trial2, modelResult.trial3] as const).map((trial, ti) => (
+                                    <Td
+                                      key={ti}
+                                      borderRight="1px"
+                                      borderColor="gray.100"
+                                      fontSize="xs"
+                                      fontWeight="bold"
+                                      bg={trial?.aborted || !trial?.answer ? "white" : trial.correct ? "green.100" : "red.100"}
+                                      maxW="60px"
+                                      overflow="hidden"
+                                      textOverflow="ellipsis"
+                                      whiteSpace="nowrap"
+                                      title={trial?.answer || '-'}
+                                    >
+                                      {!trial?.answer || trial.aborted ? '-' : trial.correct ? trial.answer : trial.answer === 'ERROR' ? 'ERROR' : 'Wrong'}
+                                    </Td>
+                                  ))}
                                   <Td 
                                     borderRight="2px" 
                                     borderColor="gray.400" 
