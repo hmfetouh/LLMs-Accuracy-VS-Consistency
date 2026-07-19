@@ -217,7 +217,7 @@ export default function Home() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [questionCount, setQuestionCount] = useState<number>(0);
-  const [systemPrompt, setSystemPrompt] = useState("Answer with only the single correct option letter (A, B, C, or D). For multiple questions, use a numbered list:\n1. A\n2. B\nNo explanation or extra text.");
+  const [systemPrompt, setSystemPrompt] = useState("You are an AI assistant helping evaluate knowledge on standardized multiple-choice exams. Answer with only the single correct option letter (A, B, C, or D). For multiple questions, use a numbered list:\n1. A\n2. B\nNo explanation or extra text.");
   const [reviewQueue, setReviewQueue] = useState<ReviewItem[]>([]);
   const [reviewModalOpen, setReviewModalOpen] = useState(false);
   const [reviewModalIndex, setReviewModalIndex] = useState(0);
@@ -2594,6 +2594,9 @@ export default function Home() {
       if (isClaude) {
         // Claude returns { content: [{type: "text", text: "..."}, ...] }
         const textBlock = Array.isArray(data.content) ? data.content.find((c: any) => c.type === 'text') : null;
+        if (!textBlock && data.stop_reason) {
+          console.warn(`[Claude] No text block. stop_reason=${data.stop_reason} content=${JSON.stringify(data.content)}`);
+        }
         rawAnswer = textBlock ? textBlock.text : "";
       } else {
         rawAnswer = data.choices[0].message.content || "";
@@ -2617,7 +2620,7 @@ export default function Home() {
           provider: model.provider,
           model: model.name,
           request: requestBody,
-          error: `Empty response: No valid answer found in model response. Raw response: "${rawAnswer}"`,
+          error: `Empty response: stop_reason=${data.stop_reason ?? 'unknown'}, content=${JSON.stringify(data.content)}, raw="${rawAnswer}"`,
           duration: duration,
           question: question,
           questionId: questionId,
@@ -2763,7 +2766,9 @@ export default function Home() {
           const supportsAdaptiveThinking = /^claude-(opus-4|sonnet-4-6|sonnet-5|fable-5|mythos-5|3-7-sonnet)/.test(apiModelId);
           const thinkingOn = supportsAdaptiveThinking && model.thinkingEnabled !== false;
           const effortLevel = model.reasoningEffort || null;
-          requestBody.max_tokens = thinkingOn ? 131072 : 4096;
+          // Fable 5 / Mythos 5 hard cap is 128000 output tokens
+          const maxThinkingTokens = /^claude-(fable-5|mythos-5)/.test(apiModelId) ? 128000 : 131072;
+          requestBody.max_tokens = thinkingOn ? maxThinkingTokens : 4096;
           requestBody.system = prompt;
           requestBody.messages = [{ role: "user", content: combinedQuestion }];
           if (thinkingOn) {
