@@ -1247,24 +1247,31 @@ export default function Home() {
                   batchAddIdxMap.push(trialResultsArray[questionIndex].modelResults[model.id].additionalTrials!.length);
                   trialResultsArray[questionIndex].modelResults[model.id].additionalTrials!.push(result);
                 });
-                // If any question needs review, add ONE batch review item with all questions
-                if (trialResults.some(r => r.needsReview)) {
-                  const rawResponse = trialResults.find(r => r.rawResponse)?.rawResponse || '';
-                  setReviewQueue(prev => [...prev, {
-                    id: `${model.id}-trial${trialNum}-batch-${Date.now()}`,
-                    modelId: model.id, modelName: model.name,
-                    questionIndex: modelInconsistentQuestions[0].index,
-                    question: '', rawResponse, correctAnswer: '',
-                    trialKey: 'batch', trialNumber: trialNum,
-                    batchQuestions: modelInconsistentQuestions.map((q, idx) => ({
-                      questionIndex: q.index,
-                      question: q.question.question,
-                      correctAnswer: q.question.answer,
-                      parsedAnswer: trialResults[idx].answer,
-                      needsReview: trialResults[idx].needsReview || false,
-                      addIdx: batchAddIdxMap[idx],
-                    })),
-                  }]);
+                // One batch review item per chunk of 10 questions, mirroring runBatchedTrial's own
+                // internal API chunk size — so each review's raw response matches the questions shown.
+                const extendedBatchSize = 10;
+                for (let bStart = 0; bStart < modelInconsistentQuestions.length; bStart += extendedBatchSize) {
+                  const bEnd = Math.min(bStart + extendedBatchSize, modelInconsistentQuestions.length);
+                  const chunkQuestions = modelInconsistentQuestions.slice(bStart, bEnd);
+                  const chunkResults = trialResults.slice(bStart, bEnd);
+                  if (chunkResults.some(r => r.needsReview)) {
+                    const rawResponse = chunkResults.find(r => r.rawResponse)?.rawResponse || '';
+                    setReviewQueue(prev => [...prev, {
+                      id: `${model.id}-trial${trialNum}-batch${bStart}-${Date.now()}`,
+                      modelId: model.id, modelName: model.name,
+                      questionIndex: chunkQuestions[0].index,
+                      question: '', rawResponse, correctAnswer: '',
+                      trialKey: 'batch', trialNumber: trialNum,
+                      batchQuestions: chunkQuestions.map((q, bIdx) => ({
+                        questionIndex: q.index,
+                        question: q.question.question,
+                        correctAnswer: q.question.answer,
+                        parsedAnswer: chunkResults[bIdx].answer,
+                        needsReview: chunkResults[bIdx].needsReview || false,
+                        addIdx: batchAddIdxMap[bStart + bIdx],
+                      })),
+                    }]);
+                  }
                 }
                 setProgress(prev => ({ ...prev, current: prev.current + 1 }));
                 setTrialResults([...trialResultsArray]);
