@@ -142,6 +142,14 @@ const deduplicateModelsById = (models: Model[]): Model[] => {
   return uniqueModels;
 };
 
+// Extracts the answer-option letters (e.g. A-D, or A-F) present in a question's text,
+// so the review panel can offer exactly the choices the question actually has.
+const getAnswerLetters = (questionText: string): string[] => {
+  const matches = [...questionText.matchAll(/\(([A-Z])\)/g)].map(m => m[1]);
+  const uniqueLetters = Array.from(new Set(matches)).sort();
+  return uniqueLetters.length >= 2 ? uniqueLetters : ['A', 'B', 'C', 'D'];
+};
+
 interface TrialResult {
   answer: string;
   correct: boolean;
@@ -7879,7 +7887,7 @@ export default function Home() {
                             {bq.question}
                           </Box>
                           <HStack spacing={1} flexWrap="wrap">
-                            {['A', 'B', 'C', 'D', 'E'].map(letter => (
+                            {getAnswerLetters(bq.question).map(letter => (
                               <Button
                                 key={letter}
                                 size="sm"
@@ -7954,7 +7962,7 @@ export default function Home() {
                 <Box>
                   <Text fontSize="xs" fontWeight="semibold" color="gray.600" mb={2} textTransform="uppercase" letterSpacing="wide">Select Answer</Text>
                   <HStack spacing={2} flexWrap="wrap">
-                    {['A', 'B', 'C', 'D', 'E'].map(letter => (
+                    {getAnswerLetters(item.question).map(letter => (
                       <Button
                         key={letter}
                         size="md"
