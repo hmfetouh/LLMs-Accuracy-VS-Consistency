@@ -4722,7 +4722,7 @@ export default function Home() {
                                       whiteSpace="nowrap"
                                       title={trial?.answer || '-'}
                                     >
-                                      {!trial?.answer || trial.aborted ? '-' : trial.correct ? trial.answer : trial.answer === 'ERROR' ? 'ERROR' : 'Wrong'}
+                                      {!trial?.answer || trial.aborted ? '-' : trial.correct ? trial.answer : trial.answer === 'ERROR' ? 'ERROR' : trial.answer === 'WRONG' ? 'Wrong' : trial.answer}
                                     </Td>
                                   ))}
                                   <Td 
@@ -7895,9 +7895,9 @@ export default function Home() {
                             <Button
                               size="sm"
                               colorScheme="red"
-                              variant={selected === 'W' ? "solid" : "outline"}
+                              variant={selected === 'Wrong' ? "solid" : "outline"}
                               fontWeight="bold"
-                              onClick={() => setBatchAnswers(prev => ({ ...prev, [item.id]: { ...(prev[item.id] || {}), [bq.questionIndex]: 'W' } }))}
+                              onClick={() => setBatchAnswers(prev => ({ ...prev, [item.id]: { ...(prev[item.id] || {}), [bq.questionIndex]: 'Wrong' } }))}
                               title="No valid answer in this response"
                             >
                               Wrong
@@ -7968,13 +7968,13 @@ export default function Home() {
                         {letter}
                       </Button>
                     ))}
-                    {item.correctAnswer.toUpperCase() !== 'W' && (
+                    {item.correctAnswer.toUpperCase() !== 'WRONG' && (
                       <Button
                         size="md"
                         colorScheme="red"
                         variant="outline"
                         fontWeight="bold"
-                        onClick={() => resolveReview(item, 'W')}
+                        onClick={() => resolveReview(item, 'Wrong')}
                         _hover={{ bg: "red.50" }}
                         title="Mark as wrong — no valid answer in this response"
                       >
