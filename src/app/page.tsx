@@ -145,7 +145,7 @@ const deduplicateModelsById = (models: Model[]): Model[] => {
 // Extracts the answer-option letters (e.g. A-D, or A-F) present in a question's text,
 // so the review panel can offer exactly the choices the question actually has.
 const getAnswerLetters = (questionText: string): string[] => {
-  const matches = [...questionText.matchAll(/\(([A-Z])\)/g)].map(m => m[1]);
+  const matches = (questionText.match(/\([A-Z]\)/g) || []).map(m => m[1]);
   const uniqueLetters = Array.from(new Set(matches)).sort();
   return uniqueLetters.length >= 2 ? uniqueLetters : ['A', 'B', 'C', 'D'];
 };
