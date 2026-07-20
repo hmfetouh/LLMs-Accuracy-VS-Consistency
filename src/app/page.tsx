@@ -2821,8 +2821,8 @@ export default function Home() {
           const supportsAdaptiveThinking = /^claude-(opus-4|sonnet-4-6|sonnet-5|fable-5|mythos-5|3-7-sonnet)/.test(apiModelId);
           const thinkingOn = supportsAdaptiveThinking && model.thinkingEnabled !== false;
           const effortLevel = model.reasoningEffort || null;
-          // Fable 5 / Mythos 5 hard cap is 128000 output tokens
-          const maxThinkingTokens = /^claude-(fable-5|mythos-5)/.test(apiModelId) ? 128000 : 131072;
+          // All current Claude models cap output at 128000 tokens
+          const maxThinkingTokens = 128000;
           requestBody.max_tokens = thinkingOn ? maxThinkingTokens : 4096;
           requestBody.system = prompt;
           requestBody.messages = [{ role: "user", content: combinedQuestion }];
