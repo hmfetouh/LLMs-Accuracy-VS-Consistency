@@ -1549,8 +1549,8 @@ export default function Home() {
 
     try {
       // Create CSV content for logs
-      let csv = 'Timestamp,Provider,Model,Question ID,Question,Duration (ms),Temperature,Prompt Tokens,Completion Tokens,Total Tokens,Answer,Correct,Error\n';
-      
+      let csv = 'Timestamp,Provider,Model,Question ID,Question,Duration (ms),Temperature,Prompt Tokens,Completion Tokens,Total Tokens,Answer,Correct,Error,Full Request,Full Response\n';
+
       apiLogs.forEach(log => {
         const timestamp = new Date(log.timestamp).toLocaleString();
         const provider = log.provider || '';
@@ -1565,8 +1565,10 @@ export default function Home() {
         const answer = log.response?.answer || '';
         const correct = log.response?.correct ? 'Yes' : 'No';
         const error = log.error ? log.error.replace(/"/g, '""') : '';
-        
-        csv += `"${timestamp}","${provider}","${model}","${questionId}","${question}",${duration},${temperature},${promptTokens},${completionTokens},${totalTokens},"${answer}","${correct}","${error}"\n`;
+        const fullRequest = log.request ? JSON.stringify(log.request).replace(/"/g, '""') : '';
+        const fullResponse = log.response ? JSON.stringify(log.response).replace(/"/g, '""') : '';
+
+        csv += `"${timestamp}","${provider}","${model}","${questionId}","${question}",${duration},${temperature},${promptTokens},${completionTokens},${totalTokens},"${answer}","${correct}","${error}","${fullRequest}","${fullResponse}"\n`;
       });
 
       // Create blob and download
