@@ -2547,7 +2547,8 @@ export default function Home() {
     correctAnswer: string,
     prompt: string,
     questionId?: string,
-    abortSignal?: AbortSignal
+    abortSignal?: AbortSignal,
+    isRetry: boolean = false
   ): Promise<TrialResult> => {
     const startTime = Date.now();
     
@@ -2687,7 +2688,12 @@ export default function Home() {
           totalTokens: 0,
           showFullRequest: false,
         }]);
-        
+
+        // Empty (non-refusal) responses are often transient — retry once before giving up.
+        if (!isRefusal && !isRetry) {
+          return runSingleQuestionTrial(model, question, correctAnswer, prompt, questionId, abortSignal, true);
+        }
+
         return {
           answer: "ERROR",
           correct: false,
